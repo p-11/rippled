@@ -27,8 +27,8 @@ namespace xrpl::mldsa {
 std::pair<Buffer, Buffer>
 keypair()
 {
-    Buffer pk(publicKeySize);
-    Buffer sk(secretKeySize);
+    Buffer pk(kPublicKeySize);
+    Buffer sk(kSecretKeySize);
     if (MLD_API_NAMESPACE(keypair)(pk.data(), sk.data()) != 0)
         logicError("mldsa::keypair: PQCP_MLDSA_NATIVE_MLDSA44_keypair failed");
     return {std::move(pk), std::move(sk)};
@@ -43,10 +43,10 @@ sign(Slice msg, Slice secretKey)
 Buffer
 sign(Slice msg, Slice secretKey, Slice context)
 {
-    if (secretKey.size() != secretKeySize)
+    if (secretKey.size() != kSecretKeySize)
         logicError("mldsa::sign: secret key has wrong size");
 
-    Buffer sig(signatureSize);
+    Buffer sig(kSignatureSize);
     std::size_t siglen = 0;
     if (MLD_API_NAMESPACE(signature)(
             sig.data(),
@@ -58,7 +58,7 @@ sign(Slice msg, Slice secretKey, Slice context)
             reinterpret_cast<std::uint8_t const*>(secretKey.data())) != 0)
         logicError("mldsa::sign: PQCP_MLDSA_NATIVE_MLDSA44_signature failed");
 
-    if (siglen != signatureSize)
+    if (siglen != kSignatureSize)
         logicError("mldsa::sign: unexpected signature length");
 
     return sig;
@@ -73,7 +73,7 @@ verify(Slice sig, Slice msg, Slice publicKey)
 bool
 verify(Slice sig, Slice msg, Slice publicKey, Slice context)
 {
-    if (sig.size() != signatureSize || publicKey.size() != publicKeySize)
+    if (sig.size() != kSignatureSize || publicKey.size() != kPublicKeySize)
         return false;
 
     auto const result = MLD_API_NAMESPACE(verify)(

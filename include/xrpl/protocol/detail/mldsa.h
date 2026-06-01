@@ -8,9 +8,9 @@
 
 namespace xrpl::mldsa {
 
-inline constexpr std::size_t publicKeySize = 1312;
-inline constexpr std::size_t secretKeySize = 2560;
-inline constexpr std::size_t signatureSize = 2420;
+inline constexpr std::size_t kPublicKeySize = 1312;
+inline constexpr std::size_t kSecretKeySize = 2560;
+inline constexpr std::size_t kSignatureSize = 2420;
 
 [[nodiscard]] std::pair<Buffer, Buffer>
 keypair();
