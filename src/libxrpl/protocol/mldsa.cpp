@@ -61,6 +61,12 @@ sign(Slice msg, Slice secretKey)
 bool
 verify(Slice sig, Slice msg, Slice publicKey)
 {
+    return verify(sig, msg, publicKey, Slice{});
+}
+
+bool
+verify(Slice sig, Slice msg, Slice publicKey, Slice context)
+{
     if (sig.size() != signatureSize || publicKey.size() != publicKeySize)
         return false;
 
@@ -69,8 +75,8 @@ verify(Slice sig, Slice msg, Slice publicKey)
         sig.size(),
         reinterpret_cast<std::uint8_t const*>(msg.data()),
         msg.size(),
-        nullptr,
-        0,
+        reinterpret_cast<std::uint8_t const*>(context.data()),
+        context.size(),
         reinterpret_cast<std::uint8_t const*>(publicKey.data()));
 
     return result == 0;

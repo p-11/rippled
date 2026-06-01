@@ -21,4 +21,7 @@ sign(Slice msg, Slice secretKey);
 [[nodiscard]] bool
 verify(Slice sig, Slice msg, Slice publicKey);
 
+[[nodiscard]] bool
+verify(Slice sig, Slice msg, Slice publicKey, Slice context);
+
 }  // namespace xrpl::mldsa
