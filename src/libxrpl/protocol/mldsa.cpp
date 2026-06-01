@@ -37,6 +37,12 @@ keypair()
 Buffer
 sign(Slice msg, Slice secretKey)
 {
+    return sign(msg, secretKey, Slice{});
+}
+
+Buffer
+sign(Slice msg, Slice secretKey, Slice context)
+{
     if (secretKey.size() != secretKeySize)
         logicError("mldsa::sign: secret key has wrong size");
 
@@ -47,8 +53,8 @@ sign(Slice msg, Slice secretKey)
             &siglen,
             reinterpret_cast<std::uint8_t const*>(msg.data()),
             msg.size(),
-            nullptr,
-            0,
+            reinterpret_cast<std::uint8_t const*>(context.data()),
+            context.size(),
             reinterpret_cast<std::uint8_t const*>(secretKey.data())) != 0)
         logicError("mldsa::sign: PQCP_MLDSA_NATIVE_MLDSA44_signature failed");
 

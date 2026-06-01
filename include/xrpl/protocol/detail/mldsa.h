@@ -18,6 +18,9 @@ keypair();
 [[nodiscard]] Buffer
 sign(Slice msg, Slice secretKey);
 
+[[nodiscard]] Buffer
+sign(Slice msg, Slice secretKey, Slice context);
+
 [[nodiscard]] bool
 verify(Slice sig, Slice msg, Slice publicKey);
 

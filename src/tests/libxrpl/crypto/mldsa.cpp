@@ -100,3 +100,23 @@ TEST(mldsa, Roundtrip)
 
     EXPECT_TRUE(xrpl::mldsa::verify(sig, xrpl::makeSlice(msg), pk));
 }
+
+TEST(mldsa, RoundtripWithContext)
+{
+    auto const [pk, sk] = xrpl::mldsa::keypair();
+    std::string const msg = "rippled hybrid post-quantum signing smoke test";
+    std::string const ctx = "xrpl-mldsa-test-context";
+
+    auto const sig = xrpl::mldsa::sign(xrpl::makeSlice(msg), sk, xrpl::makeSlice(ctx));
+    ASSERT_EQ(sig.size(), xrpl::mldsa::signatureSize);
+
+    EXPECT_TRUE(xrpl::mldsa::verify(sig, xrpl::makeSlice(msg), pk, xrpl::makeSlice(ctx)));
+
+    std::string const otherCtx = "xrpl-mldsa-other-context";
+    EXPECT_FALSE(xrpl::mldsa::verify(sig, xrpl::makeSlice(msg), pk, xrpl::makeSlice(otherCtx)))
+        << "verify must reject when context differs from the one used at sign";
+
+    EXPECT_FALSE(xrpl::mldsa::verify(sig, xrpl::makeSlice(msg), pk))
+        << "verify must reject when no context is provided against a signature "
+           "that was signed with a context";
+}
