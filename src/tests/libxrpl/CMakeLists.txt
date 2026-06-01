@@ -29,6 +29,11 @@ add_dependencies(xrpl.tests xrpl.test.basics)
 
 xrpl_add_test(crypto)
 target_link_libraries(xrpl.test.crypto PRIVATE xrpl.imports.test)
+target_compile_definitions(
+    xrpl.test.crypto
+    PRIVATE
+        XRPL_MLDSA_ACVP_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/crypto/fixtures/mldsa-44-acvp-sigver.json"
+)
 add_dependencies(xrpl.tests xrpl.test.crypto)
 
 xrpl_add_test(json)
