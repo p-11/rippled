@@ -81,6 +81,7 @@ if(only_docs)
 endif()
 
 include(deps/Boost)
+include(deps/MldsaNative)
 
 add_subdirectory(external/antithesis-sdk)
 find_package(date REQUIRED)
