@@ -1,10 +1,11 @@
+#include <xrpl/protocol/detail/mldsa.h>
+
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Buffer.h>
 #include <xrpl/basics/Slice.h>
 #include <xrpl/basics/StringUtilities.h>
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
-#include <xrpl/protocol/detail/mldsa.h>
 
 #include <gtest/gtest.h>
 
@@ -72,10 +73,7 @@ TEST(mldsa, SigVer_ACVP_KAT)
         auto const expected = tc["testPassed"].asBool();
 
         auto const actual = xrpl::mldsa::verify(
-            xrpl::makeSlice(sig),
-            xrpl::makeSlice(msg),
-            xrpl::makeSlice(pk),
-            xrpl::makeSlice(ctx));
+            xrpl::makeSlice(sig), xrpl::makeSlice(msg), xrpl::makeSlice(pk), xrpl::makeSlice(ctx));
 
         EXPECT_EQ(actual, expected)
             << "ACVP tcId " << tcId << ": expected verify=" << expected << ", got " << actual;
