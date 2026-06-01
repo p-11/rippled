@@ -65,13 +65,13 @@ sign(Slice msg, Slice secretKey, Slice context)
 }
 
 bool
-verify(Slice sig, Slice msg, Slice publicKey)
+verify(Slice sig, Slice msg, Slice publicKey) noexcept
 {
     return verify(sig, msg, publicKey, Slice{});
 }
 
 bool
-verify(Slice sig, Slice msg, Slice publicKey, Slice context)
+verify(Slice sig, Slice msg, Slice publicKey, Slice context) noexcept
 {
     if (sig.size() != kSignatureSize || publicKey.size() != kPublicKeySize)
         return false;

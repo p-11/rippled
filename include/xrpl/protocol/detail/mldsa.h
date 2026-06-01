@@ -22,9 +22,9 @@ sign(Slice msg, Slice secretKey);
 sign(Slice msg, Slice secretKey, Slice context);
 
 [[nodiscard]] bool
-verify(Slice sig, Slice msg, Slice publicKey);
+verify(Slice sig, Slice msg, Slice publicKey) noexcept;
 
 [[nodiscard]] bool
-verify(Slice sig, Slice msg, Slice publicKey, Slice context);
+verify(Slice sig, Slice msg, Slice publicKey, Slice context) noexcept;
 
 }  // namespace xrpl::mldsa
