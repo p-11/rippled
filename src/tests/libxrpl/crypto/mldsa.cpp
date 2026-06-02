@@ -94,7 +94,7 @@ TEST(mldsa, Roundtrip)
     ASSERT_EQ(pk.size(), xrpl::mldsa::kPublicKeySize);
     ASSERT_EQ(sk.size(), xrpl::mldsa::kSecretKeySize);
 
-    std::string const msg = "rippled hybrid post-quantum signing smoke test";
+    std::string const msg = "xrpld hybrid post-quantum signing smoke test";
     auto const sig = xrpl::mldsa::sign(xrpl::makeSlice(msg), sk);
     ASSERT_EQ(sig.size(), xrpl::mldsa::kSignatureSize);
 
@@ -104,7 +104,7 @@ TEST(mldsa, Roundtrip)
 TEST(mldsa, RoundtripWithContext)
 {
     auto const [pk, sk] = xrpl::mldsa::keypair();
-    std::string const msg = "rippled hybrid post-quantum signing smoke test";
+    std::string const msg = "xrpld hybrid post-quantum signing smoke test";
     std::string const ctx = "xrpl-mldsa-test-context";
 
     auto const sig = xrpl::mldsa::sign(xrpl::makeSlice(msg), sk, xrpl::makeSlice(ctx));

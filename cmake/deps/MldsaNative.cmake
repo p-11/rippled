@@ -45,7 +45,7 @@ if(mldsa_avx2)
     target_compile_options(mldsa_native PRIVATE -mavx2)
 endif()
 
-# Vendored third-party code: suppress strict warnings so rippled's -Werror
+# Vendored third-party code: suppress strict warnings so xrpld's -Werror
 # policy (under the werr build option) does not flag the library.
 target_compile_options(
     mldsa_native
