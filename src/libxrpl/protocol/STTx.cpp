@@ -16,6 +16,7 @@
 #include <xrpl/protocol/Batch.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/MPTIssue.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/Protocol.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/Rules.h>
@@ -230,11 +231,34 @@ void
 STTx::sign(
     PublicKey const& publicKey,
     SecretKey const& secretKey,
-    std::optional<std::reference_wrapper<SField const>> signatureTarget)
+    std::optional<std::reference_wrapper<SField const>> signatureTarget,
+    Slice pqPublicKey,
+    Slice pqSecretKey)
 {
+    bool const hasPQ = !pqPublicKey.empty() || !pqSecretKey.empty();
+    if (hasPQ && (pqPublicKey.empty() || pqSecretKey.empty()))
+        logicError("STTx::sign: PQ signing requires both pqPublicKey and pqSecretKey");
+    if (hasPQ && pqPublicKey.size() != kPQPublicKeySize)
+        logicError("STTx::sign: pqPublicKey has invalid size");
+    if (hasPQ && pqSecretKey.size() != kPQSecretKeySize)
+        logicError("STTx::sign: pqSecretKey has invalid size");
+    if (hasPQ && signatureTarget)
+        logicError("STTx::sign: PQ signing into a subfield is not supported");
+
+    // sfQuantumPubKey is a signing field, so it must be on the tx before the
+    // canonical signing payload is built. Otherwise the ECC and PQ signatures
+    // would cover different bytes than a verifier reconstructs, and the
+    // hybrid pair would not be cryptographically bound to each other.
+    if (hasPQ)
+        setFieldVL(sfQuantumPubKey, pqPublicKey);
+
     auto const data = getSigningData(*this);
 
     auto const sig = xrpl::sign(publicKey, secretKey, makeSlice(data));
+
+    Buffer pqSig;
+    if (hasPQ)
+        pqSig = pqSign(makeSlice(data), pqSecretKey);
 
     if (signatureTarget)
     {
@@ -244,6 +268,8 @@ STTx::sign(
     else
     {
         setFieldVL(sfTxnSignature, sig);
+        if (hasPQ)
+            setFieldVL(sfQuantumSignature, pqSig);
     }
     tid_ = getHash(HashPrefix::TransactionId);
 }

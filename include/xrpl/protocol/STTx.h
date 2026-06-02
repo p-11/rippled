@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xrpl/basics/Expected.h>
+#include <xrpl/basics/Slice.h>
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/Rules.h>
@@ -102,7 +103,9 @@ public:
     sign(
         PublicKey const& publicKey,
         SecretKey const& secretKey,
-        std::optional<std::reference_wrapper<SField const>> signatureTarget = {});
+        std::optional<std::reference_wrapper<SField const>> signatureTarget = {},
+        Slice pqPublicKey = {},
+        Slice pqSecretKey = {});
 
     /** Check the signature.
         @param rules The current ledger rules.
