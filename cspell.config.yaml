@@ -1,6 +1,7 @@
 ignorePaths:
   - build/**
   - src/libxrpl/crypto
+  - src/tests/libxrpl/crypto/fixtures/**
   - CMakeUserPresets.json
   - Doxyfile
   - docs/**/*.puml
@@ -161,6 +162,7 @@ words:
   - mathbunnyru
   - mcmodel
   - MEMORYSTATUSEX
+  - mldsa
   - MPTAMM
   - MPTDEX
   - Merkle
