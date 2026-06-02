@@ -30,6 +30,8 @@ TxFormats::getCommonFields()
         {sfSigners, SoeOptional},  // submit_multisigned
         {sfNetworkID, SoeOptional},
         {sfDelegate, SoeOptional},
+        {sfQuantumPubKey, SoeOptional},
+        {sfQuantumSignature, SoeOptional},
     };
     return kCommonFields;
 }

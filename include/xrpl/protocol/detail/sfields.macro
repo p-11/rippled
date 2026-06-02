@@ -299,6 +299,8 @@ TYPED_SFIELD(sfAssetClass,               VL,        28)
 TYPED_SFIELD(sfProvider,                 VL,        29)
 TYPED_SFIELD(sfMPTokenMetadata,          VL,        30)
 TYPED_SFIELD(sfCredentialType,           VL,        31)
+TYPED_SFIELD(sfQuantumPubKey,            VL,        32)
+TYPED_SFIELD(sfQuantumSignature,         VL,        33, SField::kSmdDefault, SField::kNotSigning)
 
 // account (common)
 TYPED_SFIELD(sfAccount,                  ACCOUNT,    1)

@@ -59,6 +59,8 @@ public:
 
         testcase("STObject constructor errors");
         testObjectCtorErrors();
+
+        testQuantumFieldsRoundTrip();
     }
 
     void
@@ -1461,6 +1463,55 @@ public:
             }
             BEAST_EXPECT(got == "Field 'Fee' is required but missing.");
         }
+    }
+
+    void
+    testQuantumFieldsRoundTrip()
+    {
+        testcase("Quantum fields round-trip");
+
+        auto const keypair = randomKeyPair(KeyType::Secp256k1);
+
+        // Opaque blobs at the ML-DSA-44 sizes; binding and signature
+        // verification are out of scope for this format-only check.
+        Blob const pqPubKey(1312, 0xAB);
+        Blob const pqSignature(2420, 0xCD);
+
+        STTx const tx(ttACCOUNT_SET, [&](auto& obj) {
+            obj.setAccountID(sfAccount, calcAccountID(keypair.first));
+            obj.setFieldVL(sfSigningPubKey, keypair.first.slice());
+            obj.setFieldVL(sfQuantumPubKey, pqPubKey);
+            obj.setFieldVL(sfQuantumSignature, pqSignature);
+        });
+
+        BEAST_EXPECT(tx.isFieldPresent(sfQuantumPubKey));
+        BEAST_EXPECT(tx.isFieldPresent(sfQuantumSignature));
+        BEAST_EXPECT(tx.getFieldVL(sfQuantumPubKey) == pqPubKey);
+        BEAST_EXPECT(tx.getFieldVL(sfQuantumSignature) == pqSignature);
+
+        Serializer s;
+        tx.add(s);
+        SerialIter sit(s.slice());
+        STTx const wireCopy(sit);
+        BEAST_EXPECT(wireCopy.getFieldVL(sfQuantumPubKey) == pqPubKey);
+        BEAST_EXPECT(wireCopy.getFieldVL(sfQuantumSignature) == pqSignature);
+
+        STParsedJSONObject const parsed("test", tx.getJson(JsonOptions::Values::None));
+        if (BEAST_EXPECT(parsed.object.has_value()))
+        {
+            BEAST_EXPECT(parsed.object->isFieldPresent(sfQuantumPubKey));
+            BEAST_EXPECT(parsed.object->isFieldPresent(sfQuantumSignature));
+            BEAST_EXPECT(STObject(tx) == *parsed.object);
+        }
+
+        // Same transaction shape without the PQ fields should still build:
+        // the common-fields extension is SoeOptional, not SoeRequired.
+        STTx const txNoPq(ttACCOUNT_SET, [&](auto& obj) {
+            obj.setAccountID(sfAccount, calcAccountID(keypair.first));
+            obj.setFieldVL(sfSigningPubKey, keypair.first.slice());
+        });
+        BEAST_EXPECT(!txNoPq.isFieldPresent(sfQuantumPubKey));
+        BEAST_EXPECT(!txNoPq.isFieldPresent(sfQuantumSignature));
     }
 };
 
