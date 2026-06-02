@@ -442,6 +442,25 @@ singleSignHelper(STObject const& sigObject, Slice const& data)
     if (!validSig)
         return Unexpected("Invalid signature.");
 
+    bool const hasPQPub = sigObject.isFieldPresent(sfQuantumPubKey);
+    bool const hasPQSig = sigObject.isFieldPresent(sfQuantumSignature);
+    if (hasPQPub != hasPQSig)
+        return Unexpected("Mismatched post-quantum signature fields.");
+    if (hasPQPub)
+    {
+        try
+        {
+            Blob const pqPub = sigObject.getFieldVL(sfQuantumPubKey);
+            Blob const pqSig = sigObject.getFieldVL(sfQuantumSignature);
+            if (!pqVerify(makeSlice(pqSig), data, makeSlice(pqPub)))
+                return Unexpected("Invalid post-quantum signature.");
+        }
+        catch (std::exception const&)
+        {
+            return Unexpected("Invalid post-quantum signature.");
+        }
+    }
+
     return {};
 }
 
