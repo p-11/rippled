@@ -135,6 +135,7 @@ LEDGER_ENTRY(ltACCOUNT_ROOT, 0x0061, AccountRoot, account, ({
     {sfPreviousTxnLgrSeq,    SoeRequired},
     {sfAccountTxnID,         SoeOptional},
     {sfRegularKey,           SoeOptional},
+    {sfQuantumPubKey,        SoeOptional},
     {sfEmailHash,            SoeOptional},
     {sfWalletLocator,        SoeOptional},
     {sfWalletSize,           SoeOptional},
