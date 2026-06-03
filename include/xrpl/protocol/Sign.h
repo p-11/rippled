@@ -45,6 +45,10 @@ verify(
 Serializer
 buildMultiSigningData(STObject const& obj, AccountID const& signingID);
 
+/** Return a Serializer suitable for computing a hybrid multisigning TxnSignature. */
+Serializer
+buildMultiSigningData(STObject const& obj, AccountID const& signingID, Slice pqPublicKey);
+
 /** Break the multi-signing hash computation into 2 parts for optimization.
 
     We can optimize verifying multiple multisignatures by splitting the
@@ -64,6 +68,14 @@ inline void
 finishMultiSigningData(AccountID const& signingID, Serializer& s)
 {
     s.addBitString(signingID);
+}
+
+inline void
+finishMultiSigningData(AccountID const& signingID, Slice pqPublicKey, Serializer& s)
+{
+    s.addBitString(signingID);
+    if (!pqPublicKey.empty())
+        s.addRaw(pqPublicKey);
 }
 
 }  // namespace xrpl

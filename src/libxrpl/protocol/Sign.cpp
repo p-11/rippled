@@ -78,6 +78,14 @@ buildMultiSigningData(STObject const& obj, AccountID const& signingID)
 }
 
 Serializer
+buildMultiSigningData(STObject const& obj, AccountID const& signingID, Slice pqPublicKey)
+{
+    Serializer s{startMultiSigningData(obj)};
+    finishMultiSigningData(signingID, pqPublicKey, s);
+    return s;
+}
+
+Serializer
 startMultiSigningData(STObject const& obj)
 {
     Serializer s;
