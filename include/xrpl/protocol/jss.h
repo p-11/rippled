@@ -68,6 +68,8 @@ JSS(Paths);                       // in/out: TransactionSign
 JSS(PriceDataSeries);             // field.
 JSS(PriceData);                   // field.
 JSS(Provider);                    // field.
+JSS(QuantumPubKey);               // field: hybrid PQ signing pubkey.
+JSS(QuantumSignature);            // field: hybrid PQ signature.
 JSS(QuoteAsset);                  // in: Oracle.
 JSS(RawTransaction);              // in: Batch
 JSS(RawTransactions);             // in: Batch
