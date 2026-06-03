@@ -35,7 +35,7 @@ QuantumSign::operator()(Env&, JTx& jt) const
         // both pubkeys on the object first so the canonical payload built by
         // addWithoutSigningFields includes sfQuantumPubKey, then sign that
         // same payload with both ECC and PQ. If STTx::sign's ordering ever
-        // changes, this loop has to change with it.
+        // changes, this lambda has to change with it.
         auto& sigObject = jtx.jv;
 
         sigObject[jss::SigningPubKey] = strHex(account.pk().slice());
