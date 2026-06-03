@@ -242,6 +242,12 @@ STTx::sign(
         logicError("STTx::sign: pqPublicKey has invalid size");
     if (hasPQ && pqSecretKey.size() != kPQSecretKeySize)
         logicError("STTx::sign: pqSecretKey has invalid size");
+    // signatureTarget is the inner-object signing path used today only by
+    // sfCounterpartySignature (LendingProtocol's LoanSet) and sfBatchSigners
+    // (Batch). Neither amendment is enabled on mainnet and neither is in
+    // scope for the hybrid PoC, so refuse the combination at the API
+    // boundary rather than silently writing PQ fields onto an inner object
+    // whose template does not permit them.
     if (hasPQ && signatureTarget)
         logicError("STTx::sign: PQ signing into a subfield is not supported");
 
