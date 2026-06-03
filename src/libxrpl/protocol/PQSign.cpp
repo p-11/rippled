@@ -7,13 +7,13 @@
 namespace xrpl {
 
 Buffer
-pqSign(Slice msg, Slice secretKey)
+pqSign(Slice secretKey, Slice msg)
 {
     return mldsa::sign(msg, secretKey);
 }
 
 bool
-pqVerify(Slice sig, Slice msg, Slice publicKey) noexcept
+pqVerify(Slice publicKey, Slice msg, Slice sig) noexcept
 {
     return mldsa::verify(sig, msg, publicKey);
 }

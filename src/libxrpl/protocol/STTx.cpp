@@ -258,7 +258,7 @@ STTx::sign(
 
     Buffer pqSig;
     if (hasPQ)
-        pqSig = pqSign(makeSlice(data), pqSecretKey);
+        pqSig = pqSign(pqSecretKey, makeSlice(data));
 
     if (signatureTarget)
     {
@@ -452,7 +452,7 @@ singleSignHelper(STObject const& sigObject, Slice const& data)
         {
             Blob const pqPub = sigObject.getFieldVL(sfQuantumPubKey);
             Blob const pqSig = sigObject.getFieldVL(sfQuantumSignature);
-            if (!pqVerify(makeSlice(pqSig), data, makeSlice(pqPub)))
+            if (!pqVerify(makeSlice(pqPub), data, makeSlice(pqSig)))
                 return Unexpected("Invalid post-quantum signature.");
         }
         catch (std::exception const&)

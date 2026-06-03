@@ -46,7 +46,7 @@ QuantumSign::operator()(Env&, JTx& jt) const
         parse(jtx.jv).addWithoutSigningFields(ss);
 
         auto const eccSig = xrpl::sign(account.pk(), account.sk(), ss.slice());
-        auto const pqSig = pqSign(ss.slice(), pqKey.secretKey());
+        auto const pqSig = pqSign(pqKey.secretKey(), ss.slice());
 
         sigObject[jss::TxnSignature] = strHex(Slice{eccSig.data(), eccSig.size()});
         sigObject[jss::QuantumSignature] = strHex(Slice{pqSig.data(), pqSig.size()});

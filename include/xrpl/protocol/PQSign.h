@@ -19,20 +19,26 @@ inline constexpr std::size_t kPQSignatureSize = mldsa::kSignatureSize;
 
     Post-quantum sibling of xrpl::sign. Raw-byte surface — payload assembly
     (HashPrefix, serialization) is the caller's responsibility, same as the
-    detail/ wrappers it sits on top of.
+    detail/ wrappers it sits on top of. Parameter order matches xrpl::sign
+    (key-args first, message last) rather than the underlying mldsa
+    primitive's (msg, sk) order.
 
     A wrong-size `secretKey` terminates via logicError rather than throwing,
     matching the contract of the underlying xrpl::mldsa::sign primitive.
 */
 [[nodiscard]] Buffer
-pqSign(Slice msg, Slice secretKey);
+pqSign(Slice secretKey, Slice msg);
 
 /** Verify a post-quantum signature `sig` over `msg` against `publicKey`.
+
+    Parameter order matches xrpl::verify (publicKey, msg, sig) rather than
+    the underlying mldsa primitive's (sig, msg, pk) order, so call sites
+    that verify both ECC and PQ in sequence read uniformly.
 
     Wrong-size inputs return false rather than throwing or terminating, so
     untrusted data can be verified without a precheck.
 */
 [[nodiscard]] bool
-pqVerify(Slice sig, Slice msg, Slice publicKey) noexcept;
+pqVerify(Slice publicKey, Slice msg, Slice sig) noexcept;
 
 }  // namespace xrpl
