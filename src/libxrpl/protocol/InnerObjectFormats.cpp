@@ -24,6 +24,8 @@ InnerObjectFormats::InnerObjectFormats()
             {sfAccount, SoeRequired},
             {sfSigningPubKey, SoeRequired},
             {sfTxnSignature, SoeRequired},
+            {sfQuantumPubKey, SoeOptional},
+            {sfQuantumSignature, SoeOptional},
         });
 
     add(sfMajority.jsonName,

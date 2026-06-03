@@ -1411,13 +1411,18 @@ transactionSubmitMultiSigned(
     if (signers.empty())
         return RPC::makeParamError("tx_json.Signers array may not be empty.");
 
-    // The Signers array may only contain Signer objects.
-    if (std::ranges::find_if_not(signers, [](STObject const& obj) {
+    // The Signers array may only contain Signer objects.  After applyTemplate
+    // each entry's getCount() equals the sfSigner inner-object template size,
+    // including non-present optional fields (e.g., the hybrid-signing
+    // sfQuantumPubKey / sfQuantumSignature pair), so this count is sourced
+    // from the template rather than hard-coded.
+    auto const* const signerTemplate =
+        InnerObjectFormats::getInstance().findSOTemplateBySField(sfSigner);
+    int const signerFieldCount = signerTemplate ? static_cast<int>(signerTemplate->size()) : 0;
+    if (std::ranges::find_if_not(signers, [signerFieldCount](STObject const& obj) {
             return (
-                // A Signer object always contains these fields and no
-                // others.
                 obj.isFieldPresent(sfAccount) && obj.isFieldPresent(sfSigningPubKey) &&
-                obj.isFieldPresent(sfTxnSignature) && obj.getCount() == 3);
+                obj.isFieldPresent(sfTxnSignature) && obj.getCount() == signerFieldCount);
         }) != signers.end())
     {
         return RPC::makeParamError("Signers array may only contain Signer entries.");
