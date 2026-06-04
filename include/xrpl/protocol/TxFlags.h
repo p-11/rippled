@@ -422,7 +422,8 @@ inline constexpr FlagValue tfDepositSubTx =
     ASF_FLAG(asfDisallowIncomingPayChan, 14)      \
     ASF_FLAG(asfDisallowIncomingTrustline, 15)    \
     ASF_FLAG(asfAllowTrustLineClawback, 16)       \
-    ASF_FLAG(asfAllowTrustLineLocking, 17)
+    ASF_FLAG(asfAllowTrustLineLocking, 17)        \
+    ASF_FLAG(asfQuantum, 18)
 
 #define ACCOUNTSET_FLAG_TO_VALUE(name, value) inline constexpr FlagValue name = value;
 #define ACCOUNTSET_FLAG_TO_MAP(name, value) {#name, value},
