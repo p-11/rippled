@@ -16,6 +16,7 @@ InnerObjectFormats::InnerObjectFormats()
             {sfAccount, SoeRequired},
             {sfSignerWeight, SoeRequired},
             {sfWalletLocator, SoeOptional},
+            {sfQuantumPubKey, SoeOptional},
         });
 
     add(sfSigner.jsonName,

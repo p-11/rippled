@@ -1,5 +1,6 @@
 #pragma once
 
+#include <xrpl/basics/Blob.h>            // Blob
 #include <xrpl/basics/Expected.h>        //
 #include <xrpl/beast/utility/Journal.h>  // beast::Journal
 #include <xrpl/protocol/TER.h>           // temMALFORMED
@@ -32,12 +33,22 @@ public:
         AccountID account;
         std::uint16_t weight;
         std::optional<uint256> tag;
+        std::optional<Blob> pqPub;
 
         SignerEntry(
             AccountID const& inAccount,
             std::uint16_t inWeight,
             std::optional<uint256> inTag)
             : account(inAccount), weight(inWeight), tag(inTag)
+        {
+        }
+
+        SignerEntry(
+            AccountID const& inAccount,
+            std::uint16_t inWeight,
+            std::optional<uint256> inTag,
+            std::optional<Blob> inPqPub)
+            : account(inAccount), weight(inWeight), tag(inTag), pqPub(std::move(inPqPub))
         {
         }
 
