@@ -310,6 +310,39 @@ public:
     }
 
     void
+    testSignerListSetPostOptInInvariant(KeyType keyType)
+    {
+        testcase(label("SignerListSet honours source opt-in", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const alice{"alice", keyType};
+        Account const bogie{"bogie", KeyType::Secp256k1};
+        env.fund(XRP(10000), alice);
+        env.close();
+
+        // Pre-register on the SignerEntry so opt-in succeeds.
+        auto pqAlice = PQKey::generate();
+        auto pqBogie = PQKey::generate();
+        env(signers(alice, 1, {Signer{bogie, 1, std::nullopt, pkBytes(pqBogie)}}));
+        env(registerQuantum(alice, pqAlice), quantum_sign(alice, pqAlice));
+        env.close();
+
+        // After opt-in, replacing the list with a PQ-less entry must be
+        // rejected so the account does not lock itself out.
+        env(signers(alice, 1, {Signer{bogie, 1}}),
+            quantum_sign(alice, pqAlice),
+            Ter(tecNO_ALTERNATIVE_KEY));
+        env.close();
+
+        // Replacing with a PQ-registered entry stays accepted.
+        auto pqBogie2 = PQKey::generate();
+        env(signers(alice, 1, {Signer{bogie, 1, std::nullopt, pkBytes(pqBogie2)}}),
+            quantum_sign(alice, pqAlice));
+        env.close();
+    }
+
+    void
     testDelegateOptInPropagation(KeyType keyType)
     {
         testcase(label("Delegate opt-in propagation", keyType));
@@ -377,6 +410,7 @@ public:
         testMultiSignPhantomSigners(keyType);
         testMultiSignDualSourceConsistency(keyType);
         testAntiLockoutInvariant(keyType);
+        testSignerListSetPostOptInInvariant(keyType);
         testDelegateOptInPropagation(keyType);
     }
 

@@ -109,6 +109,41 @@ SignerListSet::preflight(PreflightContext const& ctx)
 }
 
 TER
+SignerListSet::preclaim(PreclaimContext const& ctx)
+{
+    // Quantum: when the source has already opted in to hybrid signing,
+    // a replacement list must remain authenticatable. Every entry needs
+    // a PQ pubkey reachable from either the SignerEntry itself or the
+    // signer's own AccountRoot; otherwise the per-signer authentication
+    // would reject every subsequent multi-sign, locking the account out.
+    if (!ctx.view.rules().enabled(featureQuantum))
+        return tesSUCCESS;
+
+    auto const id = ctx.tx.getAccountID(sfAccount);
+    auto const sleSource = ctx.view.read(keylet::account(id));
+    if (!sleSource || !sleSource->isFieldPresent(sfQuantumPubKey))
+        return tesSUCCESS;
+
+    auto const result = determineOperation(ctx.tx, ctx.flags, ctx.j);
+    if (std::get<3>(result) != Operation::Set)
+        return tesSUCCESS;
+
+    for (auto const& entry : std::get<2>(result))
+    {
+        if (entry.pqPub)
+            continue;
+        auto const sleSigner = ctx.view.read(keylet::account(entry.account));
+        if (!sleSigner || !sleSigner->isFieldPresent(sfQuantumPubKey))
+        {
+            JLOG(ctx.j.trace()) << "SignerListSet: signer " << toBase58(entry.account)
+                                << " has no registered PQ pubkey; source is quantum opted in.";
+            return tecNO_ALTERNATIVE_KEY;
+        }
+    }
+    return tesSUCCESS;
+}
+
+TER
 SignerListSet::doApply()
 {
     // Perform the operation preCompute() decided on.
