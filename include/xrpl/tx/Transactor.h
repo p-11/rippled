@@ -369,6 +369,7 @@ private:
         AccountID const& idSigner,
         AccountID const& idAccount,
         std::shared_ptr<SLE const> sleAccount,
+        STObject const& sigObject,
         beast::Journal const j);
     static NotTEC
     checkMultiSign(

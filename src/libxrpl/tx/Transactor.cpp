@@ -729,7 +729,7 @@ Transactor::checkSign(
     if (!sleAccount)
         return terNO_ACCOUNT;
 
-    return checkSingleSign(view, idSigner, idAccount, sleAccount, j);
+    return checkSingleSign(view, idSigner, idAccount, sleAccount, sigObject, j);
 }
 
 NotTEC
@@ -776,7 +776,7 @@ Transactor::checkBatchSign(PreclaimContext const& ctx)
                 return tesSUCCESS;
             }
 
-            if (ret = checkSingleSign(ctx.view, idSigner, idAccount, sleAccount, ctx.j);
+            if (ret = checkSingleSign(ctx.view, idSigner, idAccount, sleAccount, signer, ctx.j);
                 !isTesSuccess(ret))
                 return ret;
         }
@@ -790,30 +790,50 @@ Transactor::checkSingleSign(
     AccountID const& idSigner,
     AccountID const& idAccount,
     std::shared_ptr<SLE const> sleAccount,
+    STObject const& sigObject,
     beast::Journal const j)
 {
     bool const isMasterDisabled = sleAccount->isFlag(lsfDisableMaster);
 
-    // Signed with regular key.
-    if ((*sleAccount)[~sfRegularKey] == idSigner)
+    auto const authorize = [&]() -> NotTEC {
+        // Signed with regular key.
+        if ((*sleAccount)[~sfRegularKey] == idSigner)
+            return tesSUCCESS;
+
+        // Signed with enabled master key.
+        if (!isMasterDisabled && idAccount == idSigner)
+            return tesSUCCESS;
+
+        // Signed with disabled master key.
+        if (isMasterDisabled && idAccount == idSigner)
+            return tefMASTER_DISABLED;
+
+        // Signed with any other key.
+        return tefBAD_AUTH;
+    };
+
+    if (NotTEC const result = authorize(); !isTesSuccess(result))
+        return result;
+
+    // Quantum: when the source account has registered a post-quantum
+    // public key, the transaction must carry the matching value as its
+    // signing pubkey. Cryptographic verify of the PQ signature is
+    // already enforced in libxrpl; this is the authentication layer.
+    if (view.rules().enabled(featureQuantum) && sleAccount->isFieldPresent(sfQuantumPubKey))
     {
-        return tesSUCCESS;
+        if (!sigObject.isFieldPresent(sfQuantumPubKey))
+        {
+            JLOG(j.trace()) << "checkSingleSign: account requires a quantum signature.";
+            return tefBAD_AUTH;
+        }
+        if (sigObject.getFieldVL(sfQuantumPubKey) != sleAccount->getFieldVL(sfQuantumPubKey))
+        {
+            JLOG(j.trace()) << "checkSingleSign: quantum public key mismatch.";
+            return tefBAD_AUTH;
+        }
     }
 
-    // Signed with enabled master key.
-    if (!isMasterDisabled && idAccount == idSigner)
-    {
-        return tesSUCCESS;
-    }
-
-    // Signed with disabled master key.
-    if (isMasterDisabled && idAccount == idSigner)
-    {
-        return tefMASTER_DISABLED;
-    }
-
-    // Signed with any other key.
-    return tefBAD_AUTH;
+    return tesSUCCESS;
 }
 
 NotTEC
