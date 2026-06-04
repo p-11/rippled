@@ -116,6 +116,12 @@ SignerListSet::preclaim(PreclaimContext const& ctx)
     // a PQ pubkey reachable from either the SignerEntry itself or the
     // signer's own AccountRoot; otherwise the per-signer authentication
     // would reject every subsequent multi-sign, locking the account out.
+    //
+    // We walk the raw sfSignerEntries array directly rather than
+    // re-running determineOperation, which would re-deserialize the
+    // entries into a fresh vector and bump per-tx allocator pressure
+    // up to ~125 KiB for a 32-signer hybrid list. preCompute() already
+    // deserializes once for doApply.
     if (!ctx.view.rules().enabled(featureQuantum))
         return tesSUCCESS;
 
@@ -124,18 +130,18 @@ SignerListSet::preclaim(PreclaimContext const& ctx)
     if (!sleSource || !sleSource->isFieldPresent(sfQuantumPubKey))
         return tesSUCCESS;
 
-    auto const result = determineOperation(ctx.tx, ctx.flags, ctx.j);
-    if (std::get<3>(result) != Operation::Set)
+    if (!ctx.tx.isFieldPresent(sfSignerEntries) || ctx.tx[sfSignerQuorum] == 0u)
         return tesSUCCESS;
 
-    for (auto const& entry : std::get<2>(result))
+    for (auto const& entry : ctx.tx.getFieldArray(sfSignerEntries))
     {
-        if (entry.pqPub)
+        if (entry.isFieldPresent(sfQuantumPubKey))
             continue;
-        auto const sleSigner = ctx.view.read(keylet::account(entry.account));
+        auto const signerAcct = entry.getAccountID(sfAccount);
+        auto const sleSigner = ctx.view.read(keylet::account(signerAcct));
         if (!sleSigner || !sleSigner->isFieldPresent(sfQuantumPubKey))
         {
-            JLOG(ctx.j.trace()) << "SignerListSet: signer " << toBase58(entry.account)
+            JLOG(ctx.j.trace()) << "SignerListSet: signer " << toBase58(signerAcct)
                                 << " has no registered PQ pubkey; source is quantum opted in.";
             return tecNO_ALTERNATIVE_KEY;
         }
