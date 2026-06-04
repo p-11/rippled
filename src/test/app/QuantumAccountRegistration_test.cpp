@@ -2,9 +2,11 @@
 #include <test/jtx/Account.h>
 #include <test/jtx/Env.h>
 #include <test/jtx/amount.h>
+#include <test/jtx/delegate.h>
 #include <test/jtx/fee.h>
 #include <test/jtx/multisign.h>
 #include <test/jtx/noop.h>
+#include <test/jtx/pay.h>
 #include <test/jtx/quantum_msig.h>
 #include <test/jtx/quantum_sign.h>
 #include <test/jtx/sig.h>
@@ -308,6 +310,42 @@ public:
     }
 
     void
+    testDelegateOptInPropagation(KeyType keyType)
+    {
+        testcase(label("Delegate opt-in propagation", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const gw{"gw", keyType};
+        Account const alice{"alice", keyType};
+        Account const bob{"bob", keyType};
+        env.fund(XRP(10000), gw, alice, bob);
+        env.close();
+
+        // gw grants alice the Payment permission.
+        env(delegate::set(gw, alice, {"Payment"}));
+        env.close();
+
+        // Source opt-in.
+        auto pqGw = PQKey::generate();
+        env(registerQuantum(gw, pqGw), quantum_sign(gw, pqGw));
+        env.close();
+
+        // alice (delegate) is not opted in: ECC-only tx as gw's delegate
+        // must be rejected even though alice's own AccountRoot is fine.
+        env(pay(gw, bob, XRP(1)), delegate::As(alice), Ter(tefBAD_AUTH));
+        env.close();
+
+        // alice opts in: now the same delegate path succeeds.
+        auto pqAlice = PQKey::generate();
+        env(registerQuantum(alice, pqAlice), quantum_sign(alice, pqAlice));
+        env.close();
+
+        env(pay(gw, bob, XRP(1)), delegate::As(alice), quantum_sign(alice, pqAlice));
+        env.close();
+    }
+
+    void
     testAmendmentGating()
     {
         testcase("Amendment gating");
@@ -339,6 +377,7 @@ public:
         testMultiSignPhantomSigners(keyType);
         testMultiSignDualSourceConsistency(keyType);
         testAntiLockoutInvariant(keyType);
+        testDelegateOptInPropagation(keyType);
     }
 
     void

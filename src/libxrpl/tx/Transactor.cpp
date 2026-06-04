@@ -737,6 +737,27 @@ Transactor::checkSign(PreclaimContext const& ctx)
 {
     auto const idAccount = ctx.tx.isFieldPresent(sfDelegate) ? ctx.tx.getAccountID(sfDelegate)
                                                              : ctx.tx.getAccountID(sfAccount);
+
+    // Quantum: under delegation, the signing check below consults the
+    // delegate's AccountRoot. That would silently bypass the source
+    // account's PQ opt-in. Require the delegate to also be opted in
+    // when the source is, so the opt-in propagates through delegation.
+    if (ctx.tx.isFieldPresent(sfDelegate) && ctx.view.rules().enabled(featureQuantum))
+    {
+        auto const sourceId = ctx.tx.getAccountID(sfAccount);
+        auto const sleSource = ctx.view.read(keylet::account(sourceId));
+        if (sleSource && sleSource->isFieldPresent(sfQuantumPubKey))
+        {
+            auto const sleDelegate = ctx.view.read(keylet::account(idAccount));
+            if (!sleDelegate || !sleDelegate->isFieldPresent(sfQuantumPubKey))
+            {
+                JLOG(ctx.j.trace())
+                    << "checkSign: delegate must be quantum opted in when source is.";
+                return tefBAD_AUTH;
+            }
+        }
+    }
+
     return checkSign(ctx.view, ctx.flags, ctx.parentBatchId, idAccount, ctx.tx, ctx.j);
 }
 
