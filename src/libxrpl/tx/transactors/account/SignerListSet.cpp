@@ -13,6 +13,7 @@
 #include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/Keylet.h>
 #include <xrpl/protocol/LedgerFormats.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STArray.h>
 #include <xrpl/protocol/STLedgerEntry.h>
@@ -288,6 +289,22 @@ SignerListSet::validateQuorumAndSignerEntries(
         }
         // Don't verify that the signer accounts exist.  Non-existent accounts
         // may be phantom accounts (which are permitted).
+
+        if (signer.pqPub)
+        {
+            if (!rules.enabled(featureQuantum))
+            {
+                JLOG(j.trace()) << "Post-quantum signer entries require the "
+                                   "Quantum amendment.";
+                return temDISABLED;
+            }
+            if (signer.pqPub->size() != kPQPublicKeySize)
+            {
+                JLOG(j.trace()) << "Post-quantum public key on signer entry "
+                                   "has invalid size.";
+                return temMALFORMED;
+            }
+        }
     }
     if ((quorum <= 0) || (allSignersWeight < quorum))
     {
@@ -399,6 +416,9 @@ SignerListSet::writeSignersToSLE(SLE::pointer const& ledgerEntry, std::uint32_t 
         // a tag into the ledger.
         if (entry.tag)
             obj.setFieldH256(sfWalletLocator, *(entry.tag));
+
+        if (entry.pqPub)
+            obj.setFieldVL(sfQuantumPubKey, *(entry.pqPub));
     }
 
     // Assign the SignerEntries.
