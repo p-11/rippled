@@ -104,6 +104,13 @@ public:
                     // the transaction.  It is tested elsewhere.
                     continue;
                 }
+                if (flag == asfQuantum)
+                {
+                    // The asfQuantum flag requires the presence of the
+                    // sfQuantumPubKey field and registers it on AccountRoot.
+                    // It is tested in QuantumAccountRegistration_test.
+                    continue;
+                }
 
                 if (flag == asfDisallowIncomingCheck || flag == asfDisallowIncomingPayChan ||
                     flag == asfDisallowIncomingNFTokenOffer || flag == asfDisallowIncomingTrustline)
