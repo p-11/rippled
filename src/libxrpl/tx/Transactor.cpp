@@ -853,6 +853,18 @@ Transactor::checkMultiSign(
         return tefNOT_MULTI_SIGNING;
     }
 
+    // Quantum: when the source account has registered a post-quantum
+    // pubkey, every signer must contribute hybrid signatures whose PQ
+    // pubkey equals either the signer's own AccountRoot value or the
+    // matching SignerEntry value.
+    bool const quantumEnabled = view.rules().enabled(featureQuantum);
+    bool sourceOptedIn = false;
+    if (quantumEnabled)
+    {
+        if (auto const sleSource = view.read(keylet::account(id)))
+            sourceOptedIn = sleSource->isFieldPresent(sfQuantumPubKey);
+    }
+
     // We have plans to support multiple SignerLists in the future.  The
     // presence and defaulted value of the SignerListID field will enable that.
     XRPL_ASSERT(
@@ -981,6 +993,51 @@ Transactor::checkMultiSign(
                 return tefBAD_SIGNATURE;
             }
         }
+        // Quantum: authenticate the per-signer PQ pubkey against either
+        // the signer's AccountRoot or the matching SignerEntry. When the
+        // source is opted in, every signer must carry hybrid signatures.
+        if (quantumEnabled)
+        {
+            bool const txSignerHasPQ = txSigner.isFieldPresent(sfQuantumPubKey);
+            if (sourceOptedIn && !txSignerHasPQ)
+            {
+                JLOG(j.trace()) << "checkMultiSign: signer missing quantum public key.";
+                return tefBAD_AUTH;
+            }
+            if (txSignerHasPQ)
+            {
+                Blob const txPQ = txSigner.getFieldVL(sfQuantumPubKey);
+                std::optional<Blob> regFromRoot;
+                if (sleTxSignerRoot && sleTxSignerRoot->isFieldPresent(sfQuantumPubKey))
+                    regFromRoot = sleTxSignerRoot->getFieldVL(sfQuantumPubKey);
+                std::optional<Blob> const& regFromEntry = iter->pqPub;
+
+                if (regFromRoot && regFromEntry && *regFromRoot != *regFromEntry)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer AccountRoot and SignerEntry "
+                                       "quantum public keys disagree.";
+                    return tefBAD_AUTH;
+                }
+                if (regFromRoot && *regFromRoot != txPQ)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer AccountRoot quantum public "
+                                       "key mismatch.";
+                    return tefBAD_AUTH;
+                }
+                if (regFromEntry && *regFromEntry != txPQ)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: SignerEntry quantum public key mismatch.";
+                    return tefBAD_AUTH;
+                }
+                if (!regFromRoot && !regFromEntry && sourceOptedIn)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer has no registered quantum "
+                                       "public key to authenticate against.";
+                    return tefBAD_AUTH;
+                }
+            }
+        }
+
         // The signer is legitimate.  Add their weight toward the quorum.
         weightSum += iter->weight;
     }
