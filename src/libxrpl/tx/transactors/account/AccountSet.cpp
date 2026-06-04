@@ -11,6 +11,7 @@
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/LedgerFormats.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/Permissions.h>
 #include <xrpl/protocol/Protocol.h>
 #include <xrpl/protocol/PublicKey.h>
@@ -166,6 +167,27 @@ AccountSet::preflight(PreflightContext const& ctx)
     if (uClearFlag == asfAuthorizedNFTokenMinter && tx.isFieldPresent(sfNFTokenMinter))
         return temMALFORMED;
 
+    // Quantum: register / clear the post-quantum public key on AccountRoot.
+    if (uSetFlag == asfQuantum || uClearFlag == asfQuantum)
+    {
+        if (!ctx.rules.enabled(featureQuantum))
+            return temDISABLED;
+
+        if (uSetFlag == asfQuantum)
+        {
+            if (!tx.isFieldPresent(sfQuantumPubKey))
+            {
+                JLOG(j.trace()) << "asfQuantum requires sfQuantumPubKey.";
+                return temMALFORMED;
+            }
+            if (tx.getFieldVL(sfQuantumPubKey).size() != kPQPublicKeySize)
+            {
+                JLOG(j.trace()) << "asfQuantum: post-quantum public key has invalid size.";
+                return temMALFORMED;
+            }
+        }
+    }
+
     return tesSUCCESS;
 }
 
@@ -269,6 +291,29 @@ AccountSet::preclaim(PreclaimContext const& ctx)
             {
                 JLOG(ctx.j.trace()) << "Can't set NoFreeze if clawback is enabled";
                 return tecNO_PERMISSION;
+            }
+        }
+    }
+
+    //
+    // Quantum: opting in requires every existing SignerEntry on this
+    // account to already carry a registered PQ pubkey. Otherwise the
+    // multi-sign signers would have nothing to authenticate against,
+    // locking the account out of its own SignerList.
+    //
+    if (ctx.view.rules().enabled(featureQuantum) && uSetFlag == asfQuantum &&
+        !sle->isFieldPresent(sfQuantumPubKey))
+    {
+        if (auto const sleSigners = ctx.view.read(keylet::signers(id)))
+        {
+            for (auto const& entry : sleSigners->getFieldArray(sfSignerEntries))
+            {
+                if (!entry.isFieldPresent(sfQuantumPubKey))
+                {
+                    JLOG(ctx.j.trace())
+                        << "asfQuantum: every SignerEntry must already carry a PQ pubkey.";
+                    return tecNO_ALTERNATIVE_KEY;
+                }
             }
         }
     }
@@ -632,6 +677,23 @@ AccountSet::doApply()
     {
         JLOG(j_.trace()) << "set allow clawback";
         uFlagsOut |= lsfAllowTrustLineClawback;
+    }
+
+    //
+    // Quantum: register or clear the post-quantum public key on AccountRoot.
+    //
+    if (ctx_.view().rules().enabled(featureQuantum))
+    {
+        if (uSetFlag == asfQuantum)
+        {
+            JLOG(j_.trace()) << "register quantum public key";
+            sle->setFieldVL(sfQuantumPubKey, tx.getFieldVL(sfQuantumPubKey));
+        }
+        else if (uClearFlag == asfQuantum && sle->isFieldPresent(sfQuantumPubKey))
+        {
+            JLOG(j_.trace()) << "clear quantum public key";
+            sle->makeFieldAbsent(sfQuantumPubKey);
+        }
     }
 
     if (uFlagsIn != uFlagsOut)
