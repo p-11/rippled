@@ -2,6 +2,7 @@
 #include <test/jtx/Account.h>
 #include <test/jtx/Env.h>
 #include <test/jtx/amount.h>
+#include <test/jtx/batch.h>
 #include <test/jtx/delegate.h>
 #include <test/jtx/fee.h>
 #include <test/jtx/multisign.h>
@@ -379,6 +380,132 @@ public:
     }
 
     void
+    testRaceToOptIn(KeyType keyType)
+    {
+        // Documents M-1: an attacker who has stolen a pre-CRQC ECC secret
+        // for an account that has not yet opted in can race the legitimate
+        // owner to register the attacker's PQ pubkey, after which ECC
+        // alone cannot recover the account. This is inherent to the
+        // implicit-opt-in design and the test exists to anchor the
+        // behaviour against accidental future regressions.
+        testcase(label("Attacker races to opt in first (M-1)", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const victim{"victim", keyType};
+        env.fund(XRP(10000), victim);
+        env.close();
+
+        // Attacker (assumed to control victim's ECC) registers their own
+        // PQ pubkey first.
+        auto pqAttacker = PQKey::generate();
+        env(registerQuantum(victim, pqAttacker), quantum_sign(victim, pqAttacker));
+        env.close();
+        BEAST_EXPECT(env.le(victim)->isFieldPresent(sfQuantumPubKey));
+
+        // Owner cannot recover by registering their own PQ keypair: the
+        // per-tx PQ pubkey is bound against the attacker's registered
+        // value, so any hybrid sign with a different PQ key is rejected
+        // at the authentication layer.
+        auto pqOwner = PQKey::generate();
+        env(registerQuantum(victim, pqOwner), quantum_sign(victim, pqOwner), Ter(tefBAD_AUTH));
+        env.close();
+
+        // A plain noop signed with the owner's PQ key is rejected for the
+        // same reason; the field on AccountRoot is unchanged.
+        env(noop(victim), quantum_sign(victim, pqOwner), Ter(tefBAD_AUTH));
+        env.close();
+    }
+
+    void
+    testSignerUnOptLockout(KeyType keyType)
+    {
+        // Documents M-2: when a source's sole-quorum SignerList relies on
+        // a signer's own AccountRoot PQ pubkey (rather than a
+        // SignerEntry-registered one), the signer can unilaterally clear
+        // their PQ field and lock the source out of multi-sign. Recovery
+        // requires the source still owning its ECC master/regular path.
+        testcase(label("Third party un-opt induces lockout (M-2)", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const alice{"alice", keyType};
+        Account const bob{"bob", keyType};
+        env.fund(XRP(10000), alice, bob);
+        env.close();
+
+        auto pqAlice = PQKey::generate();
+        auto pqBob = PQKey::generate();
+
+        // Bob registers PQ on his own AccountRoot; SignerEntry stays bare.
+        env(registerQuantum(bob, pqBob), quantum_sign(bob, pqBob));
+        env(signers(alice, 1, {{bob, 1}}));
+        env(registerQuantum(alice, pqAlice), quantum_sign(alice, pqAlice));
+        env.close();
+
+        auto const baseFee = env.current()->fees().base;
+
+        // Baseline: multi-sign succeeds while Bob is still opted in.
+        env(noop(alice), quantum_msig({QuantumSigner{Reg{bob}, pqBob}}), Fee(2 * baseFee));
+        env.close();
+
+        // Bob clears his own PQ field. AccountSet only validates Bob's
+        // own state; there is no global check that Bob is a critical
+        // signer for Alice.
+        env(clearQuantum(bob), quantum_sign(bob, pqBob));
+        env.close();
+        BEAST_EXPECT(!env.le(bob)->isFieldPresent(sfQuantumPubKey));
+
+        // Alice's multi-sign now fails because Bob has no registered PQ
+        // anywhere (no SignerEntry PQ, no AccountRoot PQ).
+        env(noop(alice),
+            quantum_msig({QuantumSigner{Reg{bob}, pqBob}}),
+            Fee(2 * baseFee),
+            Ter(tefBAD_AUTH));
+        env.close();
+
+        // Alice can still recover via her own ECC path (master key is
+        // active in this fixture), but only by un-opting first.
+        env(clearQuantum(alice), quantum_sign(alice, pqAlice));
+        env.close();
+        BEAST_EXPECT(!env.le(alice)->isFieldPresent(sfQuantumPubKey));
+    }
+
+    void
+    testOptedInCannotBatchSign(KeyType keyType)
+    {
+        // The sfBatchSigner inner-object template carries no PQ fields,
+        // so an opted-in account cannot participate as an inner batch
+        // signer (the per-signer authentication finds no per-tx
+        // sfQuantumPubKey and rejects). This is over-rejection rather
+        // than a binding bypass, but the test exists to anchor it
+        // against accidental future template changes that would reopen
+        // the bypass.
+        testcase(label("Opted-in account cannot inner-batch sign", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const alice{"alice", keyType};
+        Account const bob{"bob", keyType};
+        Account const carol{"carol", keyType};
+        env.fund(XRP(10000), alice, bob, carol);
+        env.close();
+
+        auto pqBob = PQKey::generate();
+        env(registerQuantum(bob, pqBob), quantum_sign(bob, pqBob));
+        env.close();
+
+        auto const aliceSeq = env.seq(alice);
+        auto const batchFee = batch::calcBatchFee(env, 1, 2);
+        env(batch::outer(alice, aliceSeq, batchFee, tfAllOrNothing),
+            batch::Inner(pay(alice, carol, XRP(1)), aliceSeq + 1),
+            batch::Inner(pay(bob, carol, XRP(1)), env.seq(bob)),
+            batch::Sig(bob),
+            Ter(tefBAD_AUTH));
+        env.close();
+    }
+
+    void
     testAmendmentGating()
     {
         testcase("Amendment gating");
@@ -412,6 +539,9 @@ public:
         testAntiLockoutInvariant(keyType);
         testSignerListSetPostOptInInvariant(keyType);
         testDelegateOptInPropagation(keyType);
+        testRaceToOptIn(keyType);
+        testSignerUnOptLockout(keyType);
+        testOptedInCannotBatchSign(keyType);
     }
 
     void
