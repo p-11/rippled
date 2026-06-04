@@ -22,17 +22,12 @@ struct Signer
     std::optional<uint256> tag;
     std::optional<Blob> pqPub;
 
-    Signer(Account account, std::uint32_t weight = 1, std::optional<uint256> tag = std::nullopt)
-        : weight(weight), account(std::move(account)), tag(tag)
-    {
-    }
-
     Signer(
         Account account,
-        std::uint32_t weight,
-        std::optional<uint256> tag,
-        std::optional<Blob> pqPub)
-        : weight(weight), account(std::move(account)), tag(tag), pqPub(std::move(pqPub))
+        std::uint32_t weight = 1,
+        std::optional<uint256> tag = std::nullopt,
+        std::optional<Blob> pqPub = std::nullopt)
+        : weight(weight), account(std::move(account)), tag(std::move(tag)), pqPub(std::move(pqPub))
     {
     }
 };

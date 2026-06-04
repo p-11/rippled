@@ -690,8 +690,14 @@ AccountSet::doApply()
     {
         if (uSetFlag == asfQuantum)
         {
+            Blob const pq = tx.getFieldVL(sfQuantumPubKey);
+            // preflight already enforces presence and size; defend in
+            // depth against a future code path that might bypass it.
+            XRPL_ASSERT(
+                pq.size() == kPQPublicKeySize,
+                "xrpl::AccountSet::doApply : quantum public key size");
             JLOG(j_.trace()) << "register quantum public key";
-            sle->setFieldVL(sfQuantumPubKey, tx.getFieldVL(sfQuantumPubKey));
+            sle->setFieldVL(sfQuantumPubKey, pq);
         }
         else if (uClearFlag == asfQuantum && sle->isFieldPresent(sfQuantumPubKey))
         {

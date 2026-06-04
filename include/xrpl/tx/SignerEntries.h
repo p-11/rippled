@@ -38,17 +38,9 @@ public:
         SignerEntry(
             AccountID const& inAccount,
             std::uint16_t inWeight,
-            std::optional<uint256> inTag)
-            : account(inAccount), weight(inWeight), tag(inTag)
-        {
-        }
-
-        SignerEntry(
-            AccountID const& inAccount,
-            std::uint16_t inWeight,
             std::optional<uint256> inTag,
-            std::optional<Blob> inPqPub)
-            : account(inAccount), weight(inWeight), tag(inTag), pqPub(std::move(inPqPub))
+            std::optional<Blob> inPqPub = std::nullopt)
+            : account(inAccount), weight(inWeight), tag(std::move(inTag)), pqPub(std::move(inPqPub))
         {
         }
 
