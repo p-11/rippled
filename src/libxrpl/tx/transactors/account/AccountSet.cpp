@@ -296,10 +296,10 @@ AccountSet::preclaim(PreclaimContext const& ctx)
     }
 
     //
-    // Quantum: opting in requires every existing SignerEntry on this
-    // account to already carry a registered PQ pubkey. Otherwise the
-    // multi-sign signers would have nothing to authenticate against,
-    // locking the account out of its own SignerList.
+    // Quantum: opting in requires every contributing signer to already
+    // have a registered PQ pubkey on either the SignerEntry or the
+    // signer's own AccountRoot. Otherwise the multi-sign authentication
+    // layer cannot validate any future transaction.
     //
     if (ctx.view.rules().enabled(featureQuantum) && uSetFlag == asfQuantum &&
         !sle->isFieldPresent(sfQuantumPubKey))
@@ -308,10 +308,14 @@ AccountSet::preclaim(PreclaimContext const& ctx)
         {
             for (auto const& entry : sleSigners->getFieldArray(sfSignerEntries))
             {
-                if (!entry.isFieldPresent(sfQuantumPubKey))
+                if (entry.isFieldPresent(sfQuantumPubKey))
+                    continue;
+                auto const signerAcct = entry.getAccountID(sfAccount);
+                auto const sleSigner = ctx.view.read(keylet::account(signerAcct));
+                if (!sleSigner || !sleSigner->isFieldPresent(sfQuantumPubKey))
                 {
-                    JLOG(ctx.j.trace())
-                        << "asfQuantum: every SignerEntry must already carry a PQ pubkey.";
+                    JLOG(ctx.j.trace()) << "asfQuantum: signer " << toBase58(signerAcct)
+                                        << " has no registered PQ pubkey.";
                     return tecNO_ALTERNATIVE_KEY;
                 }
             }
