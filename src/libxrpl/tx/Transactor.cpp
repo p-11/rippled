@@ -28,6 +28,7 @@
 #include <xrpl/protocol/Rules.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STAmount.h>
+#include <xrpl/protocol/STBlob.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
 #include <xrpl/protocol/Serializer.h>  // IWYU pragma: keep
@@ -44,6 +45,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -52,6 +54,21 @@
 #include <vector>
 
 namespace xrpl {
+
+namespace {
+
+// Read a VL field's bytes as a Slice without copying. Caller must have
+// already verified the field is present. Used on the per-tx PQ
+// authentication hot path so that we don't pay the ~1.3 KiB heap
+// allocation that STObject::getFieldVL() does per access.
+[[nodiscard]] inline Slice
+peekVL(STObject const& obj, SField const& field)
+{
+    auto const& blob = dynamic_cast<STBlob const&>(obj.peekAtField(field));
+    return Slice(blob.data(), blob.size());
+}
+
+}  // namespace
 
 /** Performs early sanity checks on the txid */
 NotTEC
@@ -847,7 +864,7 @@ Transactor::checkSingleSign(
             JLOG(j.trace()) << "checkSingleSign: account requires a quantum signature.";
             return tefBAD_AUTH;
         }
-        if (sigObject.getFieldVL(sfQuantumPubKey) != sleAccount->getFieldVL(sfQuantumPubKey))
+        if (peekVL(sigObject, sfQuantumPubKey) != peekVL(*sleAccount, sfQuantumPubKey))
         {
             JLOG(j.trace()) << "checkSingleSign: quantum public key mismatch.";
             return tefBAD_AUTH;
@@ -1017,6 +1034,9 @@ Transactor::checkMultiSign(
         // Quantum: authenticate the per-signer PQ pubkey against either
         // the signer's AccountRoot or the matching SignerEntry. When the
         // source is opted in, every signer must carry hybrid signatures.
+        // We compare STBlob references rather than copy each value into a
+        // Blob; per ML-DSA-44 pubkey that saves a ~1.3 KiB heap allocation
+        // per signer.
         if (quantumEnabled)
         {
             bool const txSignerHasPQ = txSigner.isFieldPresent(sfQuantumPubKey);
@@ -1027,11 +1047,15 @@ Transactor::checkMultiSign(
             }
             if (txSignerHasPQ)
             {
-                Blob const txPQ = txSigner.getFieldVL(sfQuantumPubKey);
-                std::optional<Blob> regFromRoot;
-                if (sleTxSignerRoot && sleTxSignerRoot->isFieldPresent(sfQuantumPubKey))
-                    regFromRoot = sleTxSignerRoot->getFieldVL(sfQuantumPubKey);
-                std::optional<Blob> const& regFromEntry = iter->pqPub;
+                auto const txPQ = peekVL(txSigner, sfQuantumPubKey);
+
+                std::optional<Slice> const regFromRoot =
+                    (sleTxSignerRoot && sleTxSignerRoot->isFieldPresent(sfQuantumPubKey))
+                    ? std::optional<Slice>{peekVL(*sleTxSignerRoot, sfQuantumPubKey)}
+                    : std::nullopt;
+                std::optional<Slice> const regFromEntry = iter->pqPub
+                    ? std::optional<Slice>{Slice(iter->pqPub->data(), iter->pqPub->size())}
+                    : std::nullopt;
 
                 if (regFromRoot && regFromEntry && *regFromRoot != *regFromEntry)
                 {
