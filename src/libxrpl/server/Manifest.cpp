@@ -85,6 +85,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         // - a signature using the ephemeral signing key, if it is present
         {sfSignature, SoeOptional},
+
+        // featureQuantum: hybrid manifests carry an ML-DSA-44 master key
+        // and ephemeral key with signatures from each. All four PQ fields
+        // are present together, or none are present.
+        {sfQuantumMasterPublicKey, SoeOptional},
+        {sfQuantumMasterSignature, SoeOptional},
+        {sfQuantumPubKey, SoeOptional},
+        {sfQuantumSignature, SoeOptional},
     };
 
     try
@@ -122,6 +130,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         bool const hasEphemeralKey = st.isFieldPresent(sfSigningPubKey);
         bool const hasEphemeralSig = st.isFieldPresent(sfSignature);
+        bool const hasPqMasterKey = st.isFieldPresent(sfQuantumMasterPublicKey);
+        bool const hasPqMasterSig = st.isFieldPresent(sfQuantumMasterSignature);
+        bool const hasPqEphemeralKey = st.isFieldPresent(sfQuantumPubKey);
+        bool const hasPqEphemeralSig = st.isFieldPresent(sfQuantumSignature);
+        bool const anyPq =
+            hasPqMasterKey || hasPqMasterSig || hasPqEphemeralKey || hasPqEphemeralSig;
+        bool const allPq =
+            hasPqMasterKey && hasPqMasterSig && hasPqEphemeralKey && hasPqEphemeralSig;
 
         if (Manifest::revoked(seq))
         {
@@ -131,6 +147,10 @@ deserializeManifest(Slice s, beast::Journal journal)
                 return std::nullopt;
 
             if (hasEphemeralSig)
+                return std::nullopt;
+
+            // Revocation manifests carry no PQ material either.
+            if (anyPq)
                 return std::nullopt;
         }
         else
@@ -152,6 +172,10 @@ deserializeManifest(Slice s, beast::Journal journal)
 
             // The signing and master keys can't be the same
             if (*signingKey == masterKey)
+                return std::nullopt;
+
+            // Hybrid manifests must carry all four PQ fields together.
+            if (anyPq && !allPq)
                 return std::nullopt;
         }
 
