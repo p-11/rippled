@@ -2,6 +2,9 @@
 
 #include <xrpl/basics/Buffer.h>
 #include <xrpl/basics/Slice.h>
+#include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/STObject.h>
 #include <xrpl/protocol/detail/mldsa.h>
 
 #include <cstddef>
@@ -40,5 +43,35 @@ pqSign(Slice secretKey, Slice msg);
 */
 [[nodiscard]] bool
 pqVerify(Slice publicKey, Slice msg, Slice sig) noexcept;
+
+/** Produce a post-quantum signature over an STObject and store it on the object.
+
+    Post-quantum sibling of the ECC `xrpl::sign(STObject&, ...)` helper. The
+    signed payload is `HashPrefix || serialize(st without signing fields)`,
+    identical to the ECC path, so PQ and ECC signatures over the same
+    object commit to the same bytes. `sigField` defaults to
+    `sfQuantumSignature`; it is set on `st` after signing (overwriting any
+    prior value).
+*/
+void
+pqSign(
+    STObject& st,
+    HashPrefix const& prefix,
+    Slice secretKey,
+    SF_VL const& sigField = sfQuantumSignature);
+
+/** Verify a post-quantum signature stored on an STObject.
+
+    Symmetric counterpart to `pqSign(STObject&, ...)`. Returns false if
+    `sigField` is absent from `st`, the signature is the wrong size, or
+    the signature does not verify against the same
+    `HashPrefix || serialize(st without signing fields)` payload.
+*/
+[[nodiscard]] bool
+pqVerify(
+    STObject const& st,
+    HashPrefix const& prefix,
+    Slice publicKey,
+    SF_VL const& sigField = sfQuantumSignature);
 
 }  // namespace xrpl
