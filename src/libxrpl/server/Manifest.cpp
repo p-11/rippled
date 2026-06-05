@@ -12,6 +12,7 @@
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SOTemplate.h>
@@ -179,10 +180,31 @@ deserializeManifest(Slice s, beast::Journal journal)
                 return std::nullopt;
         }
 
+        std::optional<Buffer> quantumMasterKey;
+        std::optional<Buffer> quantumSigningKey;
+        if (hasPqMasterKey && hasPqEphemeralKey)
+        {
+            auto const pqMaster = st.getFieldVL(sfQuantumMasterPublicKey);
+            auto const pqEphemeral = st.getFieldVL(sfQuantumPubKey);
+
+            if (pqMaster.size() != kPQPublicKeySize || pqEphemeral.size() != kPQPublicKeySize)
+                return std::nullopt;
+
+            quantumMasterKey.emplace(pqMaster.data(), pqMaster.size());
+            quantumSigningKey.emplace(pqEphemeral.data(), pqEphemeral.size());
+        }
+
         std::string const serialized(reinterpret_cast<char const*>(s.data()), s.size());
 
         // If the manifest is revoked, then the signingKey will be unseated
-        return Manifest(serialized, masterKey, signingKey, seq, domain);
+        return Manifest(
+            serialized,
+            masterKey,
+            signingKey,
+            seq,
+            domain,
+            std::move(quantumMasterKey),
+            std::move(quantumSigningKey));
     }
     catch (std::exception const& ex)
     {
@@ -231,7 +253,31 @@ Manifest::verify() const
     if (!revoked() && !xrpl::verify(st, HashPrefix::Manifest, *signingKey))
         return false;
 
-    return xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature);
+    if (!xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature))
+        return false;
+
+    // Hybrid manifests: both PQ signatures must verify against the
+    // declared PQ master and ephemeral pubkeys. The deserializer
+    // guarantees all-four-or-none consistency, so the presence of
+    // quantumMasterKey is enough to imply the entire pair is set on `st`.
+    if (quantumMasterKey)
+    {
+        if (!xrpl::pqVerify(
+                st,
+                HashPrefix::Manifest,
+                Slice(quantumMasterKey->data(), quantumMasterKey->size()),
+                sfQuantumMasterSignature))
+            return false;
+
+        if (!xrpl::pqVerify(
+                st,
+                HashPrefix::Manifest,
+                Slice(quantumSigningKey->data(), quantumSigningKey->size()),
+                sfQuantumSignature))
+            return false;
+    }
+
+    return true;
 }
 
 uint256

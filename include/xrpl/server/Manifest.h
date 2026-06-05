@@ -1,5 +1,6 @@
 #pragma once
 
+#include <xrpl/basics/Buffer.h>
 #include <xrpl/basics/UnorderedContainers.h>
 #include <xrpl/beast/utility/Journal.h>
 #include <xrpl/protocol/PublicKey.h>
@@ -78,6 +79,14 @@ struct Manifest
     /// The domain, if one was specified in the manifest; empty otherwise.
     std::string domain;
 
+    /// Hybrid manifests: the long-term ML-DSA-44 master public key.
+    /// Set together with quantumSigningKey or both unset.
+    std::optional<Buffer> quantumMasterKey;
+
+    /// Hybrid manifests: the rotatable ML-DSA-44 ephemeral public key
+    /// used to sign STValidations and consensus proposals.
+    std::optional<Buffer> quantumSigningKey;
+
     Manifest() = delete;
 
     Manifest(
@@ -85,12 +94,16 @@ struct Manifest
         PublicKey const& masterKey,
         std::optional<PublicKey> const& signingKey,
         std::uint32_t seq,
-        std::string domain)
+        std::string domain,
+        std::optional<Buffer> quantumMasterKey = std::nullopt,
+        std::optional<Buffer> quantumSigningKey = std::nullopt)
         : serialized(std::move(serialized))
         , masterKey(masterKey)
         , signingKey(signingKey)
         , sequence(seq)
         , domain(std::move(domain))
+        , quantumMasterKey(std::move(quantumMasterKey))
+        , quantumSigningKey(std::move(quantumSigningKey))
     {
     }
 
