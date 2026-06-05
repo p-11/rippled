@@ -2,6 +2,8 @@
 
 #include <xrpl/basics/Log.h>
 #include <xrpl/beast/utility/instrumentation.h>
+#include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/STObject.h>
 #include <xrpl/protocol/SecretKey.h>
@@ -69,7 +71,9 @@ public:
         PublicKey const& pk,
         SecretKey const& sk,
         NodeID const& nodeID,
-        F&& f);
+        F&& f,
+        Slice pqPublicKey = Slice{},
+        Slice pqSecretKey = Slice{});
 
     // Hash of the validated ledger
     uint256
@@ -182,7 +186,9 @@ STValidation::STValidation(
     PublicKey const& pk,
     SecretKey const& sk,
     NodeID const& nodeID,
-    F&& f)
+    F&& f,
+    Slice pqPublicKey,
+    Slice pqSecretKey)
     : STObject(validationFormat(), sfValidation)
     , signingPubKey_(pk)
     , nodeID_(nodeID)
@@ -203,9 +209,21 @@ STValidation::STValidation(
     // Perform additional initialization
     f(*this);
 
+    bool const hybrid = !pqPublicKey.empty() && !pqSecretKey.empty();
+
+    // Place the PQ pubkey before computing the ECC signature so the ECC
+    // signing hash commits to both pubkeys (downgrade resistance: stripping
+    // sfQuantumPubKey changes the signed bytes and breaks the ECC sig).
+    if (hybrid)
+        setFieldVL(sfQuantumPubKey, pqPublicKey);
+
     // Finally, sign the validation and mark it as trusted:
     setFlag(kVfFullyCanonicalSig);
     setFieldVL(sfSignature, signDigest(pk, sk, getSigningHash()));
+
+    if (hybrid)
+        pqSign(*this, HashPrefix::Validation, pqSecretKey);
+
     setTrusted();
 
     // Check to ensure that all required fields are present.
