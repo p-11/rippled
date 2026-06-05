@@ -360,8 +360,20 @@ loadValidatorToken(std::vector<std::string> const& blob, beast::Journal journal)
 
                 if (key && key->size() == 32)
                 {
+                    std::optional<Buffer> pqSecret;
+                    auto const pq = token.get("pq_validation_secret_key", json::Value{});
+                    if (pq.isString())
+                    {
+                        auto const pqBytes = strUnHex(pq.asString());
+                        if (!pqBytes || pqBytes->size() != kPQSecretKeySize)
+                            return std::nullopt;
+                        pqSecret.emplace(pqBytes->data(), pqBytes->size());
+                    }
+
                     return ValidatorToken{
-                        .manifest = m.asString(), .validationSecret = makeSlice(*key)};
+                        .manifest = m.asString(),
+                        .validationSecret = makeSlice(*key),
+                        .pqValidationSecret = std::move(pqSecret)};
                 }
             }
         }

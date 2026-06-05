@@ -1,10 +1,12 @@
 #pragma once
 
+#include <xrpl/basics/Buffer.h>
 #include <xrpl/beast/utility/Journal.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SecretKey.h>
 #include <xrpl/protocol/UintTypes.h>
 
+#include <optional>
 #include <string>
 
 namespace xrpl {
@@ -23,6 +25,14 @@ public:
         PublicKey masterPublicKey;
         PublicKey publicKey;
         SecretKey secretKey;
+
+        // Hybrid validators: ML-DSA-44 master pubkey, ephemeral pubkey,
+        // and ephemeral secret key. Either all three are set or none are.
+        // The master and ephemeral pubkeys mirror the values published in
+        // the manifest; the secret key is supplied by the validator token.
+        std::optional<Buffer> pqMasterPublicKey;
+        std::optional<Buffer> pqPublicKey;
+        std::optional<Buffer> pqSecretKey;
 
         Keys() = delete;
         Keys(PublicKey const& masterPublic, PublicKey const& pub, SecretKey const& secret)

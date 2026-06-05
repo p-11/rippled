@@ -198,6 +198,10 @@ struct ValidatorToken
 {
     std::string manifest;
     SecretKey validationSecret;
+
+    /// Hybrid validators: the ML-DSA-44 ephemeral secret key paired with
+    /// the manifest's quantumSigningKey. Empty for ECC-only validators.
+    std::optional<Buffer> pqValidationSecret;
 };
 
 std::optional<ValidatorToken>

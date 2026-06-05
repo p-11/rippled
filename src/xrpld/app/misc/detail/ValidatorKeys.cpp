@@ -33,7 +33,10 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             auto const pk = derivePublicKey(KeyType::Secp256k1, token->validationSecret);
             auto const m = deserializeManifest(base64Decode(token->manifest));
 
-            if (!m || pk != m->signingKey)
+            bool const manifestHybrid = m && m->quantumMasterKey && m->quantumSigningKey;
+            bool const tokenHybrid = token->pqValidationSecret.has_value();
+
+            if (!m || pk != m->signingKey || (manifestHybrid != tokenHybrid))
             {
                 configInvalid_ = true;
                 JLOG(j.fatal()) << "Invalid token specified in [" SECTION_VALIDATOR_TOKEN "]";
@@ -41,6 +44,12 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             else
             {
                 keys.emplace(m->masterKey, pk, token->validationSecret);
+                if (manifestHybrid)
+                {
+                    keys->pqMasterPublicKey = m->quantumMasterKey;
+                    keys->pqPublicKey = m->quantumSigningKey;
+                    keys->pqSecretKey = std::move(token->pqValidationSecret);
+                }
                 nodeID = calcNodeID(m->masterKey);
                 sequence = m->sequence;
                 manifest = std::move(token->manifest);
