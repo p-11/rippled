@@ -842,6 +842,11 @@ RCLConsensus::Adaptor::validate(RCLCxLedger const& ledger, RCLTxSet const& txns,
 
     auto const& keys = *validatorKeys_.keys;
 
+    Slice const pqPub =
+        keys.pqPublicKey ? Slice(keys.pqPublicKey->data(), keys.pqPublicKey->size()) : Slice{};
+    Slice const pqSec =
+        keys.pqSecretKey ? Slice(keys.pqSecretKey->data(), keys.pqSecretKey->size()) : Slice{};
+
     auto v = std::make_shared<STValidation>(
         lastValidationTime_,
         keys.publicKey,
@@ -892,7 +897,9 @@ RCLConsensus::Adaptor::validate(RCLCxLedger const& ledger, RCLTxSet const& txns,
                 if (!amendments.empty())
                     v.setFieldV256(sfAmendments, STVector256(sfAmendments, amendments));
             }
-        });
+        },
+        pqPub,
+        pqSec);
 
     auto const serialized = v->getSerialized();
 
