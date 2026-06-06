@@ -104,6 +104,16 @@ STValidation::isValid() const noexcept
 {
     if (!valid_)
     {
+        // verifyDigest is hardcoded to secp256k1; gate the call so a
+        // non-secp256k1-signed validation reaching this path is reported
+        // invalid instead of triggering a logic_error inside a noexcept
+        // context.
+        if (publicKeyType(getSignerPublic()) != KeyType::Secp256k1)
+        {
+            valid_ = false;
+            return false;
+        }
+
         bool ok = verifyDigest(
             getSignerPublic(),
             getSigningHash(),

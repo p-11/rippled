@@ -10,6 +10,7 @@
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STObject.h>
@@ -17,6 +18,7 @@
 #include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/Sign.h>
+#include <xrpl/protocol/detail/mldsa.h>
 #include <xrpl/protocol/tokens.h>
 #include <xrpl/server/Manifest.h>
 #include <xrpl/server/Wallet.h>
@@ -211,8 +213,123 @@ public:
     static Manifest
     clone(Manifest const& m)
     {
-        Manifest m2(m.serialized, m.masterKey, m.signingKey, m.sequence, m.domain);
+        Manifest m2(
+            m.serialized,
+            m.masterKey,
+            m.signingKey,
+            m.sequence,
+            m.domain,
+            m.quantumMasterKey,
+            m.quantumSigningKey);
         return m2;
+    }
+
+    Manifest
+    makeHybridManifest(
+        SecretKey const& sk,
+        KeyType type,
+        SecretKey const& ssk,
+        KeyType stype,
+        Slice pqMasterPub,
+        Slice pqMasterSec,
+        Slice pqEphemeralPub,
+        Slice pqEphemeralSec,
+        int seq)
+    {
+        auto const pk = derivePublicKey(type, sk);
+        auto const spk = derivePublicKey(stype, ssk);
+
+        STObject st(sfGeneric);
+        st[sfSequence] = seq;
+        st[sfPublicKey] = pk;
+        st[sfSigningPubKey] = spk;
+        st.setFieldVL(sfQuantumPubKey, pqEphemeralPub);
+        st.setFieldVL(sfQuantumMasterPublicKey, pqMasterPub);
+
+        // Both PQ pubkeys are signing fields, so the ECC signatures
+        // below commit to them; ECC and PQ signatures are NotSigning so
+        // they do not interfere with each other's signed payloads.
+        sign(st, HashPrefix::Manifest, stype, ssk);
+        sign(st, HashPrefix::Manifest, type, sk, sfMasterSignature);
+        pqSign(st, HashPrefix::Manifest, pqEphemeralSec, sfQuantumSignature);
+        pqSign(st, HashPrefix::Manifest, pqMasterSec, sfQuantumMasterSignature);
+
+        BEAST_EXPECT(verify(st, HashPrefix::Manifest, spk));
+        BEAST_EXPECT(verify(st, HashPrefix::Manifest, pk, sfMasterSignature));
+        BEAST_EXPECT(pqVerify(st, HashPrefix::Manifest, pqEphemeralPub, sfQuantumSignature));
+        BEAST_EXPECT(pqVerify(st, HashPrefix::Manifest, pqMasterPub, sfQuantumMasterSignature));
+
+        Serializer s;
+        st.add(s);
+        std::string const m(static_cast<char const*>(s.data()), s.size());
+        if (auto r = deserializeManifest(m))
+            return std::move(*r);
+        Throw<std::runtime_error>("Could not create a hybrid manifest");
+        return *deserializeManifest(std::string{});  // silence warning
+    }
+
+    void
+    testHybridManifest()
+    {
+        testcase("hybrid manifest sign / verify");
+
+        auto const sk = randomSecretKey();
+        auto const ssk = randomSecretKey();
+        auto [pqMasterPub, pqMasterSec] = mldsa::keypair();
+        auto [pqEphemeralPub, pqEphemeralSec] = mldsa::keypair();
+
+        auto const m = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            ssk,
+            KeyType::Secp256k1,
+            Slice(pqMasterPub),
+            Slice(pqMasterSec),
+            Slice(pqEphemeralPub),
+            Slice(pqEphemeralSec),
+            7);
+
+        BEAST_EXPECT(m.verify());
+        BEAST_EXPECT(m.quantumMasterKey);
+        BEAST_EXPECT(m.quantumSigningKey);
+        BEAST_EXPECT(m.quantumMasterKey->size() == kPQPublicKeySize);
+        BEAST_EXPECT(m.quantumSigningKey->size() == kPQPublicKeySize);
+
+        // Tampering the on-wire PQ master signature breaks verify.
+        std::string corrupted = m.serialized;
+        corrupted[corrupted.size() - 5] ^= 0x01;
+        auto const reparsed = deserializeManifest(corrupted);
+        if (BEAST_EXPECT(reparsed))
+            BEAST_EXPECT(!reparsed->verify());
+
+        // Revocation manifests must not carry PQ fields; the deserializer
+        // rejects them outright.
+        STObject revoke(sfGeneric);
+        revoke[sfSequence] = std::numeric_limits<std::uint32_t>::max();
+        revoke[sfPublicKey] = derivePublicKey(KeyType::Ed25519, sk);
+        revoke.setFieldVL(sfQuantumMasterPublicKey, Slice(pqMasterPub));
+        revoke.setFieldVL(sfQuantumPubKey, Slice(pqEphemeralPub));
+        sign(revoke, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        pqSign(revoke, HashPrefix::Manifest, Slice(pqMasterSec), sfQuantumMasterSignature);
+        pqSign(revoke, HashPrefix::Manifest, Slice(pqEphemeralSec), sfQuantumSignature);
+        Serializer rs;
+        revoke.add(rs);
+        std::string const revStr(reinterpret_cast<char const*>(rs.data()), rs.size());
+        BEAST_EXPECT(!deserializeManifest(revStr));
+
+        // Dropping a PQ field (any one of the four) yields an inconsistent
+        // set; the deserializer rejects partial PQ.
+        STObject partial(sfGeneric);
+        partial[sfSequence] = 8;
+        partial[sfPublicKey] = derivePublicKey(KeyType::Ed25519, sk);
+        partial[sfSigningPubKey] = derivePublicKey(KeyType::Secp256k1, ssk);
+        partial.setFieldVL(sfQuantumPubKey, Slice(pqEphemeralPub));
+        sign(partial, HashPrefix::Manifest, KeyType::Secp256k1, ssk);
+        sign(partial, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        Serializer ps;
+        partial.add(ps);
+        std::string const partStr(reinterpret_cast<char const*>(ps.data()), ps.size());
+        BEAST_EXPECT(!deserializeManifest(partStr));
     }
 
     void
@@ -944,6 +1061,7 @@ public:
         testManifestDeserialization();
         testManifestDomainNames();
         testManifestVersioning();
+        testHybridManifest();
     }
 };
 
