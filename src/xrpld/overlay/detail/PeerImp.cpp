@@ -1756,6 +1756,26 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
         return;
     }
 
+    // Hybrid proposals must carry both the PQ pubkey and signature, both
+    // sized to the ML-DSA-44 spec. Reject ill-formed pairs outright so an
+    // attacker can't grief the verification path with garbage.
+    bool const hasPqPub = set.has_pqpubkey();
+    bool const hasPqSig = set.has_pqsignature();
+    Slice pqPub{};
+    Slice pqSig{};
+    if (hasPqPub || hasPqSig)
+    {
+        if (!hasPqPub || !hasPqSig || set.pqpubkey().size() != kPQPublicKeySize ||
+            set.pqsignature().size() != kPQSignatureSize)
+        {
+            JLOG(pJournal_.warn()) << "Proposal: malformed PQ fields";
+            fee_.update(Resource::kFeeMalformedRequest, "malformed PQ fields");
+            return;
+        }
+        pqPub = makeSlice(set.pqpubkey());
+        pqSig = makeSlice(set.pqsignature());
+    }
+
     // RH TODO: when isTrusted = false we should probably also cache a key
     // suppression for 30 seconds to avoid doing a relatively expensive lookup
     // every time a spam packet is received
@@ -1781,7 +1801,7 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
     NetClock::time_point const closeTime{NetClock::duration{set.closetime()}};
 
     uint256 const suppression = proposalUniqueId(
-        proposeHash, prevLedger, set.proposeseq(), closeTime, publicKey.slice(), sig);
+        proposeHash, prevLedger, set.proposeseq(), closeTime, publicKey.slice(), sig, pqPub, pqSig);
 
     if (auto [added, relayed] = app_.getHashRouter().addSuppressionPeerWithStatus(suppression, id_);
         !added)
@@ -1820,6 +1840,8 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
     auto proposal = RCLCxPeerPos(
         publicKey,
         sig,
+        pqPub,
+        pqSig,
         suppression,
         RCLCxPeerPos::Proposal{
             prevLedger,

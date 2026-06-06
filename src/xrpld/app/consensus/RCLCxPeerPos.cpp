@@ -32,10 +32,39 @@ RCLCxPeerPos::RCLCxPeerPos(
         signature_.assign(signature.begin(), signature.end());
 }
 
+RCLCxPeerPos::RCLCxPeerPos(
+    PublicKey const& publicKey,
+    Slice const& signature,
+    Slice const& pqPublicKey,
+    Slice const& pqSignature,
+    uint256 const& suppression,
+    Proposal const& proposal)
+    : RCLCxPeerPos(publicKey, signature, suppression, proposal)
+{
+    if (!pqPublicKey.empty() && !pqSignature.empty())
+    {
+        pqPublicKey_.emplace(pqPublicKey.data(), pqPublicKey.size());
+        pqSignature_.emplace(pqSignature.data(), pqSignature.size());
+    }
+}
+
 bool
 RCLCxPeerPos::checkSign() const
 {
-    return verifyDigest(publicKey(), proposal_.signingHash(), signature(), false);
+    if (!verifyDigest(publicKey(), proposal_.signingHash(), signature(), false))
+        return false;
+
+    if (pqPublicKey_)
+    {
+        auto const& h = proposal_.signingHash();
+        if (!pqVerify(
+                Slice{pqPublicKey_->data(), pqPublicKey_->size()},
+                Slice{h.data(), h.size()},
+                Slice{pqSignature_->data(), pqSignature_->size()}))
+            return false;
+    }
+
+    return true;
 }
 
 json::Value
@@ -58,13 +87,30 @@ proposalUniqueId(
     Slice const& publicKey,
     Slice const& signature)
 {
-    Serializer s(512);
+    return proposalUniqueId(
+        proposeHash, previousLedger, proposeSeq, closeTime, publicKey, signature, {}, {});
+}
+
+uint256
+proposalUniqueId(
+    uint256 const& proposeHash,
+    uint256 const& previousLedger,
+    std::uint32_t proposeSeq,
+    NetClock::time_point closeTime,
+    Slice const& publicKey,
+    Slice const& signature,
+    Slice const& pqPublicKey,
+    Slice const& pqSignature)
+{
+    Serializer s(512 + 2 * kPQPublicKeySize);
     s.addBitString(proposeHash);
     s.addBitString(previousLedger);
     s.add32(proposeSeq);
     s.add32(closeTime.time_since_epoch().count());
     s.addVL(publicKey);
     s.addVL(signature);
+    s.addVL(pqPublicKey);
+    s.addVL(pqSignature);
 
     return s.getSHA512Half();
 }
