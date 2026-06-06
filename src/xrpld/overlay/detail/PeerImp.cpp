@@ -84,6 +84,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <map>
@@ -2391,21 +2392,38 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMValidation> const& m)
         // lookup every time a spam packet is received
         auto const isTrusted = app_.getValidators().trusted(val->getSignerPublic());
 
-        // Fail-closed hardening for hybrid validators: when the operator
-        // has opted in, drop validations from validators whose active
-        // manifest declares a PQ ephemeral key but the validation itself
-        // does not carry sfQuantumSignature.
-        if (app_.config().pqValidationFailClosed)
+        // Hybrid binding enforcement against the validator's manifest:
+        //
+        // - Always (regardless of fail-open/closed handling): if both the
+        //   manifest and the validation declare a PQ ephemeral pubkey,
+        //   they must match. A validation whose PQ pubkey differs from
+        //   the manifest's authorised value is an attempted forgery
+        //   (e.g. an attacker who stole the ECC ephemeral and used their
+        //   own PQ keypair) and is rejected.
+        //
+        // - Fail-closed only: if the manifest declares a PQ ephemeral
+        //   but the validation does not carry sfQuantumSignature, drop
+        //   it before paying signature-verification cost.
+        auto const masterKey = app_.getValidatorManifests().getMasterKey(val->getSignerPublic());
+        auto const manifestPq = app_.getValidatorManifests().getQuantumSigningKey(masterKey);
+        if (manifestPq && val->isFieldPresent(sfQuantumPubKey))
         {
-            auto const masterKey =
-                app_.getValidatorManifests().getMasterKey(val->getSignerPublic());
-            if (app_.getValidatorManifests().getQuantumSigningKey(masterKey) &&
-                !val->isFieldPresent(sfQuantumSignature))
+            auto const declared = val->getFieldVL(sfQuantumPubKey);
+            if (declared.size() != manifestPq->size() ||
+                std::memcmp(declared.data(), manifestPq->data(), declared.size()) != 0)
             {
-                JLOG(pJournal_.warn()) << "Validation: missing PQ signature from hybrid validator";
-                fee_.update(Resource::kFeeUselessData, "missing PQ signature");
+                JLOG(pJournal_.warn()) << "Validation: PQ pubkey does not match manifest";
+                fee_.update(Resource::kFeeInvalidSignature, "PQ pubkey mismatch");
                 return;
             }
+        }
+
+        if (app_.config().pqValidationFailClosed && manifestPq &&
+            !val->isFieldPresent(sfQuantumSignature))
+        {
+            JLOG(pJournal_.warn()) << "Validation: missing PQ signature from hybrid validator";
+            fee_.update(Resource::kFeeUselessData, "missing PQ signature");
+            return;
         }
 
         // If the operator has specified that untrusted validations be
