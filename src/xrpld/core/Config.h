@@ -155,6 +155,17 @@ public:
     int relayUntrustedValidations = 1;
     int relayUntrustedProposals = 0;
 
+    // Hybrid (post-quantum) validation handling:
+    // false (fail_open, default): accept ECC-only validations even from
+    //   validators whose manifest declares a PQ ephemeral, so a mixed
+    //   network can roll out hybrid signing gradually.
+    // true (fail_closed): drop any validation from a validator whose
+    //   active manifest declares a PQ ephemeral but the validation does
+    //   not carry sfQuantumSignature; the manifest binding closes the
+    //   downgrade attack at the protocol layer regardless, so this flag
+    //   is a hardening lever for operators of fully-hybrid networks.
+    bool pqValidationFailClosed = false;
+
     // True to ask peers not to relay current IP.
     bool peerPrivate = false;
     // peers_max is a legacy configuration, which is going to be replaced

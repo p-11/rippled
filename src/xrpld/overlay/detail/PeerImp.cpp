@@ -2391,6 +2391,23 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMValidation> const& m)
         // lookup every time a spam packet is received
         auto const isTrusted = app_.getValidators().trusted(val->getSignerPublic());
 
+        // Fail-closed hardening for hybrid validators: when the operator
+        // has opted in, drop validations from validators whose active
+        // manifest declares a PQ ephemeral key but the validation itself
+        // does not carry sfQuantumSignature.
+        if (app_.config().pqValidationFailClosed)
+        {
+            auto const masterKey =
+                app_.getValidatorManifests().getMasterKey(val->getSignerPublic());
+            if (app_.getValidatorManifests().getQuantumSigningKey(masterKey) &&
+                !val->isFieldPresent(sfQuantumSignature))
+            {
+                JLOG(pJournal_.warn()) << "Validation: missing PQ signature from hybrid validator";
+                fee_.update(Resource::kFeeUselessData, "missing PQ signature");
+                return;
+            }
+        }
+
         // If the operator has specified that untrusted validations be
         // dropped then this happens here I.e. before further wasting CPU
         // verifying the signature of an untrusted key

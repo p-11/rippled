@@ -664,6 +664,23 @@ Config::loadFromString(std::string const& fileContents)
         }
     }
 
+    if (getSingleSection(secConfig, SECTION_PQ_VALIDATIONS, strTemp, j_))
+    {
+        if (boost::iequals(strTemp, "fail_open"))
+        {
+            pqValidationFailClosed = false;
+        }
+        else if (boost::iequals(strTemp, "fail_closed"))
+        {
+            pqValidationFailClosed = true;
+        }
+        else
+        {
+            Throw<std::runtime_error>("Invalid value specified in [" SECTION_PQ_VALIDATIONS
+                                      "] section");
+        }
+    }
+
     if (exists(SECTION_VALIDATION_SEED) && exists(SECTION_VALIDATOR_TOKEN))
     {
         Throw<std::runtime_error>("Cannot have both [" SECTION_VALIDATION_SEED
