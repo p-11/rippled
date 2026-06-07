@@ -11,9 +11,24 @@ namespace xrpl::mldsa {
 inline constexpr std::size_t kPublicKeySize = 1312;
 inline constexpr std::size_t kSecretKeySize = 2560;
 inline constexpr std::size_t kSignatureSize = 2420;
+inline constexpr std::size_t kSeedSize = 32;
 
 [[nodiscard]] std::pair<Buffer, Buffer>
 keypair();
+
+/** Deterministic ML-DSA-44 keypair from a 32-byte seed.
+
+    Wraps the mldsa-native `crypto_sign_keypair_internal` primitive
+    that takes a caller-supplied seed instead of drawing entropy from
+    randombytes. Two calls with the same seed produce identical
+    keypairs, which lets `wallet_propose` honour the same
+    passphrase/seed/seed_hex flow it uses for ECC.
+
+    A wrong-size `seed` terminates via logicError, matching the
+    contract of the other primitives in this header.
+*/
+[[nodiscard]] std::pair<Buffer, Buffer>
+keypair(Slice seed);
 
 [[nodiscard]] Buffer
 sign(Slice msg, Slice secretKey);

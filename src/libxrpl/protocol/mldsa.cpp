@@ -34,6 +34,20 @@ keypair()
     return {std::move(pk), std::move(sk)};
 }
 
+std::pair<Buffer, Buffer>
+keypair(Slice seed)
+{
+    if (seed.size() != kSeedSize)
+        logicError("mldsa::keypair: seed has wrong size");
+
+    Buffer pk(kPublicKeySize);
+    Buffer sk(kSecretKeySize);
+    if (MLD_API_NAMESPACE(keypair_internal)(
+            pk.data(), sk.data(), reinterpret_cast<std::uint8_t const*>(seed.data())) != 0)
+        logicError("mldsa::keypair: PQCP_MLDSA_NATIVE_MLDSA44_keypair_internal failed");
+    return {std::move(pk), std::move(sk)};
+}
+
 Buffer
 sign(Slice msg, Slice secretKey)
 {
