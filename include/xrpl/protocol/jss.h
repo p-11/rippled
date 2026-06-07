@@ -482,6 +482,8 @@ JSS(pseudo_account);              // out: AccountInfo
 JSS(pubkey_node);                 // out: NetworkOPs
 JSS(pubkey_publisher);            // out: ValidatorList
 JSS(pubkey_validator);            // out: NetworkOPs, ValidatorList
+JSS(pq_ephemeral_key);            // out: Manifest (hex)
+JSS(pq_master_key);               // out: Manifest (hex)
 JSS(pq_seed_hex);                 // in: Sign, SignFor; out: WalletPropose
 JSS(public_key);                  // out: OverlayImpl, PeerImp, WalletPropose, ValidatorInfo
                                   // in/out: Manifest
