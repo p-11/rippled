@@ -16,13 +16,21 @@
 #include <xrpld/rpc/Role.h>
 #include <xrpld/rpc/detail/TransactionSign.h>
 
+#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/contract.h>
+#include <xrpl/basics/strHex.h>
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/json/to_string.h>
 #include <xrpl/protocol/ErrorCodes.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
+#include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/STArray.h>
+#include <xrpl/protocol/STObject.h>
+#include <xrpl/protocol/STTx.h>
+#include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/TxFlags.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/server/LoadFeeTrack.h>
@@ -2833,6 +2841,112 @@ public:
         }
     }
 
+    static std::shared_ptr<STTx const>
+    txFromBlob(std::string const& tx_blob_hex)
+    {
+        auto const bytes = strUnHex(tx_blob_hex);
+        if (!bytes)
+            return nullptr;
+        SerialIter sit(makeSlice(*bytes));
+        return std::make_shared<STTx>(std::ref(sit));
+    }
+
+    void
+    testHybridSigning()
+    {
+        testcase("hybrid sign/sign_for RPCs");
+
+        using namespace test::jtx;
+        Env env(*this);
+
+        // Mint a PQ keypair via wallet_propose for the master.
+        json::Value wpParams;
+        wpParams[jss::key_type] = "dilithium";
+        wpParams[jss::passphrase] = "masterpassphrase";
+        auto const wpResult = env.rpc("json", "wallet_propose", to_string(wpParams))[jss::result];
+        BEAST_EXPECT(!RPC::containsError(wpResult));
+        std::string const pqSeedHex = wpResult[jss::pq_seed_hex].asString();
+        BEAST_EXPECT(!pqSeedHex.empty());
+
+        // Hybrid single-sign: the produced tx_blob carries both
+        // sfQuantumPubKey and sfQuantumSignature.
+        {
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(env.master);
+            toSign[jss::secret] = "masterpassphrase";
+            toSign[jss::pq_seed_hex] = pqSeedHex;
+            auto const result = env.rpc("json", "sign", to_string(toSign))[jss::result];
+            BEAST_EXPECT(!RPC::containsError(result));
+
+            auto const tx = txFromBlob(result[jss::tx_blob].asString());
+            if (BEAST_EXPECT(tx))
+            {
+                BEAST_EXPECT(tx->isFieldPresent(sfQuantumPubKey));
+                BEAST_EXPECT(tx->isFieldPresent(sfQuantumSignature));
+                BEAST_EXPECT(tx->getFieldVL(sfQuantumPubKey).size() == kPQPublicKeySize);
+                BEAST_EXPECT(tx->getFieldVL(sfQuantumSignature).size() == kPQSignatureSize);
+            }
+        }
+
+        // Malformed pq_seed_hex → invalid params.
+        {
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(env.master);
+            toSign[jss::secret] = "masterpassphrase";
+            toSign[jss::pq_seed_hex] = "not-hex";
+            auto const result = env.rpc("json", "sign", to_string(toSign))[jss::result];
+            BEAST_EXPECT(RPC::containsError(result));
+        }
+
+        // ECC-only sign keeps producing ECC-only blobs (regression).
+        {
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(env.master);
+            toSign[jss::secret] = "masterpassphrase";
+            auto const result = env.rpc("json", "sign", to_string(toSign))[jss::result];
+            BEAST_EXPECT(!RPC::containsError(result));
+
+            auto const tx = txFromBlob(result[jss::tx_blob].asString());
+            if (BEAST_EXPECT(tx))
+            {
+                BEAST_EXPECT(!tx->isFieldPresent(sfQuantumPubKey));
+                BEAST_EXPECT(!tx->isFieldPresent(sfQuantumSignature));
+            }
+        }
+
+        // Hybrid sign_for: the resulting Signer carries the PQ pair.
+        {
+            Account const alice("alice");
+            Account const becky("becky");
+            env.fund(XRP(10000), alice, becky);
+            env(signers(alice, 1, {{becky, 1}}));
+            env.close();
+
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(alice);
+            toSign[jss::tx_json][sfSigningPubKey.getJsonName()] = "";
+            toSign[jss::tx_json][jss::Sequence] = env.seq(alice);
+            toSign[jss::tx_json][jss::Fee] = "20";
+            toSign[jss::account] = becky.human();
+            toSign[jss::secret] = "becky";
+            toSign[jss::pq_seed_hex] = pqSeedHex;
+            auto const result = env.rpc("json", "sign_for", to_string(toSign))[jss::result];
+            BEAST_EXPECT(!RPC::containsError(result));
+
+            auto const tx = txFromBlob(result[jss::tx_blob].asString());
+            if (BEAST_EXPECT(tx) && BEAST_EXPECT(tx->isFieldPresent(sfSigners)))
+            {
+                auto const& signers = tx->getFieldArray(sfSigners);
+                if (BEAST_EXPECT(!signers.empty()))
+                {
+                    auto const& signer = signers[0];
+                    BEAST_EXPECT(signer.isFieldPresent(sfQuantumPubKey));
+                    BEAST_EXPECT(signer.isFieldPresent(sfQuantumSignature));
+                }
+            }
+        }
+    }
+
     void
     run() override
     {
@@ -2842,6 +2956,7 @@ public:
         testAutoFillEscalatedFees();
         testAutoFillNetworkID();
         testTransactionRPC();
+        testHybridSigning();
     }
 };
 
