@@ -17,6 +17,30 @@ Per the Project-11 PoC project description, this prototype:
 This document grows as later commits land the four subcommands, the
 two mock modules, and the end-to-end reproduction script.
 
+## Module boundary: the ECC custody mock
+
+`EccCustodyMock` (`ecc_custody_mock.{h,cpp}`) stands in for the Ripple
+Custody Application. It exposes three operations to the wallet:
+
+- `initializeFromSeed(seed, key_type)` — create fresh custody material.
+- `publicKey()` — return the public half so the wallet can compute
+  account IDs and embed `sfSigningPubKey` on signed transactions.
+- `signWithECC(payload)` — the blackbox sign request. In production
+  this is a network call to the MPC+HSM-backed Custody service; in
+  this PoC it loads its locally-persisted secret and calls
+  `xrpl::sign` in-process.
+
+The mock persists its state to a file separate from the wallet's
+public state file (defaults to `./pq-wallet.custody.json` alongside
+`./pq-wallet.json`). The wallet binary never opens that file
+directly; the boundary is enforced at the filesystem level so the
+swap-for-real seam stays honest.
+
+Setting `RIPPLE_CUSTODY_FAIL=1` in the environment makes the mock
+return a deliberately-corrupted signature, so reviewers can confirm
+that the server-side hybrid binding gate is what makes the wallet's
+acceptance non-trivial.
+
 ## Build
 
 The tool is gated behind an opt-in CMake option so the default
