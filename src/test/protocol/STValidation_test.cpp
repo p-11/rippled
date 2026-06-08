@@ -4,6 +4,7 @@
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/beast/xor_shift_engine.h>
 #include <xrpl/json/to_string.h>  // IWYU pragma: keep
+#include <xrpl/protocol/KeyType.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STValidation.h>
@@ -206,16 +207,22 @@ public:
             BEAST_EXPECT(strcmp(ex.what(), "Invalid public key in validation") == 0);
         }
 
+        // Ed25519 pubkey: accepted at deserialize time (signature is
+        // verified only when checkSignature=true; pre-RD-445 the keytype
+        // check threw before signature verification could run).
         try
         {
             SerialIter sit{kPayload4};
             auto val = std::make_shared<xrpl::STValidation>(
                 sit, [](PublicKey const& pk) { return calcNodeID(pk); }, false);
-            fail("An exception should have been thrown");
+
+            BEAST_EXPECT(val);
+            BEAST_EXPECT(val->isFieldPresent(sfSigningPubKey));
+            BEAST_EXPECT(publicKeyType(val->getSignerPublic()) == KeyType::Ed25519);
         }
         catch (std::exception const& ex)
         {
-            BEAST_EXPECT(strcmp(ex.what(), "Invalid public key in validation") == 0);
+            fail(std::string("Unexpected exception thrown: ") + ex.what());
         }
 
         testcase("Deserialization: Missing Fields");

@@ -84,6 +84,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <map>
@@ -1756,6 +1757,26 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
         return;
     }
 
+    // Hybrid proposals must carry both the PQ pubkey and signature, both
+    // sized to the ML-DSA-44 spec. Reject ill-formed pairs outright so an
+    // attacker can't grief the verification path with garbage.
+    bool const hasPqPub = set.has_pqpubkey();
+    bool const hasPqSig = set.has_pqsignature();
+    Slice pqPub{};
+    Slice pqSig{};
+    if (hasPqPub || hasPqSig)
+    {
+        if (!hasPqPub || !hasPqSig || set.pqpubkey().size() != kPQPublicKeySize ||
+            set.pqsignature().size() != kPQSignatureSize)
+        {
+            JLOG(pJournal_.warn()) << "Proposal: malformed PQ fields";
+            fee_.update(Resource::kFeeMalformedRequest, "malformed PQ fields");
+            return;
+        }
+        pqPub = makeSlice(set.pqpubkey());
+        pqSig = makeSlice(set.pqsignature());
+    }
+
     // RH TODO: when isTrusted = false we should probably also cache a key
     // suppression for 30 seconds to avoid doing a relatively expensive lookup
     // every time a spam packet is received
@@ -1781,7 +1802,7 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
     NetClock::time_point const closeTime{NetClock::duration{set.closetime()}};
 
     uint256 const suppression = proposalUniqueId(
-        proposeHash, prevLedger, set.proposeseq(), closeTime, publicKey.slice(), sig);
+        proposeHash, prevLedger, set.proposeseq(), closeTime, publicKey.slice(), sig, pqPub, pqSig);
 
     if (auto [added, relayed] = app_.getHashRouter().addSuppressionPeerWithStatus(suppression, id_);
         !added)
@@ -1820,6 +1841,8 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
     auto proposal = RCLCxPeerPos(
         publicKey,
         sig,
+        pqPub,
+        pqSig,
         suppression,
         RCLCxPeerPos::Proposal{
             prevLedger,
@@ -2368,6 +2391,40 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMValidation> const& m)
         // suppression for 30 seconds to avoid doing a relatively expensive
         // lookup every time a spam packet is received
         auto const isTrusted = app_.getValidators().trusted(val->getSignerPublic());
+
+        // Hybrid binding enforcement against the validator's manifest:
+        //
+        // - Always (regardless of fail-open/closed handling): if both the
+        //   manifest and the validation declare a PQ ephemeral pubkey,
+        //   they must match. A validation whose PQ pubkey differs from
+        //   the manifest's authorised value is an attempted forgery
+        //   (e.g. an attacker who stole the ECC ephemeral and used their
+        //   own PQ keypair) and is rejected.
+        //
+        // - Fail-closed only: if the manifest declares a PQ ephemeral
+        //   but the validation does not carry sfQuantumSignature, drop
+        //   it before paying signature-verification cost.
+        auto const masterKey = app_.getValidatorManifests().getMasterKey(val->getSignerPublic());
+        auto const manifestPq = app_.getValidatorManifests().getQuantumSigningKey(masterKey);
+        if (manifestPq && val->isFieldPresent(sfQuantumPubKey))
+        {
+            auto const declared = val->getFieldVL(sfQuantumPubKey);
+            if (declared.size() != manifestPq->size() ||
+                std::memcmp(declared.data(), manifestPq->data(), declared.size()) != 0)
+            {
+                JLOG(pJournal_.warn()) << "Validation: PQ pubkey does not match manifest";
+                fee_.update(Resource::kFeeInvalidSignature, "PQ pubkey mismatch");
+                return;
+            }
+        }
+
+        if (app_.config().pqValidationFailClosed && manifestPq &&
+            !val->isFieldPresent(sfQuantumSignature))
+        {
+            JLOG(pJournal_.warn()) << "Validation: missing PQ signature from hybrid validator";
+            fee_.update(Resource::kFeeUselessData, "missing PQ signature");
+            return;
+        }
 
         // If the operator has specified that untrusted validations be
         // dropped then this happens here I.e. before further wasting CPU

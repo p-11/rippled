@@ -7,6 +7,7 @@
 #include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SOTemplate.h>
@@ -59,6 +60,9 @@ STValidation::validationFormat()
         {sfBaseFeeDrops,          SoeOptional},
         {sfReserveBaseDrops,      SoeOptional},
         {sfReserveIncrementDrops, SoeOptional},
+        // featureQuantum
+        {sfQuantumPubKey,         SoeOptional},
+        {sfQuantumSignature,      SoeOptional},
     };
     // clang-format on
 
@@ -100,15 +104,36 @@ STValidation::isValid() const noexcept
 {
     if (!valid_)
     {
-        XRPL_ASSERT(
-            publicKeyType(getSignerPublic()) == KeyType::Secp256k1,
-            "xrpl::STValidation::isValid : valid key type");
+        // verifyDigest is hardcoded to secp256k1; gate the call so a
+        // non-secp256k1-signed validation reaching this path is reported
+        // invalid instead of triggering a logic_error inside a noexcept
+        // context.
+        if (publicKeyType(getSignerPublic()) != KeyType::Secp256k1)
+        {
+            valid_ = false;
+            return false;
+        }
 
-        valid_ = verifyDigest(
+        bool ok = verifyDigest(
             getSignerPublic(),
             getSigningHash(),
             makeSlice(getFieldVL(sfSignature)),
             (getFlags() & kVfFullyCanonicalSig) != 0u);
+
+        if (ok && isFieldPresent(sfQuantumPubKey))
+        {
+            try
+            {
+                ok =
+                    pqVerify(*this, HashPrefix::Validation, makeSlice(getFieldVL(sfQuantumPubKey)));
+            }
+            catch (...)
+            {
+                ok = false;
+            }
+        }
+
+        valid_ = ok;
     }
 
     return valid_.value();

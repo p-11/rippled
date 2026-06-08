@@ -62,6 +62,8 @@ words:
   - bindir
   - bookdir
   - Bougalis
+  - pqpubkey
+  - pqsignature
   - Britto
   - Btrfs
   - Buildx

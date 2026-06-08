@@ -301,6 +301,8 @@ TYPED_SFIELD(sfMPTokenMetadata,          VL,        30)
 TYPED_SFIELD(sfCredentialType,           VL,        31)
 TYPED_SFIELD(sfQuantumPubKey,            VL,        32)
 TYPED_SFIELD(sfQuantumSignature,         VL,        33, SField::kSmdDefault, SField::kNotSigning)
+TYPED_SFIELD(sfQuantumMasterPublicKey,   VL,        34)
+TYPED_SFIELD(sfQuantumMasterSignature,   VL,        35, SField::kSmdDefault, SField::kNotSigning)
 
 // account (common)
 TYPED_SFIELD(sfAccount,                  ACCOUNT,    1)

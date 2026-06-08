@@ -12,6 +12,7 @@
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SOTemplate.h>
@@ -85,6 +86,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         // - a signature using the ephemeral signing key, if it is present
         {sfSignature, SoeOptional},
+
+        // featureQuantum: hybrid manifests carry an ML-DSA-44 master key
+        // and ephemeral key with signatures from each. All four PQ fields
+        // are present together, or none are present.
+        {sfQuantumMasterPublicKey, SoeOptional},
+        {sfQuantumMasterSignature, SoeOptional},
+        {sfQuantumPubKey, SoeOptional},
+        {sfQuantumSignature, SoeOptional},
     };
 
     try
@@ -122,6 +131,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         bool const hasEphemeralKey = st.isFieldPresent(sfSigningPubKey);
         bool const hasEphemeralSig = st.isFieldPresent(sfSignature);
+        bool const hasPqMasterKey = st.isFieldPresent(sfQuantumMasterPublicKey);
+        bool const hasPqMasterSig = st.isFieldPresent(sfQuantumMasterSignature);
+        bool const hasPqEphemeralKey = st.isFieldPresent(sfQuantumPubKey);
+        bool const hasPqEphemeralSig = st.isFieldPresent(sfQuantumSignature);
+        bool const anyPq =
+            hasPqMasterKey || hasPqMasterSig || hasPqEphemeralKey || hasPqEphemeralSig;
+        bool const allPq =
+            hasPqMasterKey && hasPqMasterSig && hasPqEphemeralKey && hasPqEphemeralSig;
 
         if (Manifest::revoked(seq))
         {
@@ -131,6 +148,10 @@ deserializeManifest(Slice s, beast::Journal journal)
                 return std::nullopt;
 
             if (hasEphemeralSig)
+                return std::nullopt;
+
+            // Revocation manifests carry no PQ material either.
+            if (anyPq)
                 return std::nullopt;
         }
         else
@@ -153,12 +174,37 @@ deserializeManifest(Slice s, beast::Journal journal)
             // The signing and master keys can't be the same
             if (*signingKey == masterKey)
                 return std::nullopt;
+
+            // Hybrid manifests must carry all four PQ fields together.
+            if (anyPq && !allPq)
+                return std::nullopt;
+        }
+
+        std::optional<Buffer> quantumMasterKey;
+        std::optional<Buffer> quantumSigningKey;
+        if (hasPqMasterKey && hasPqEphemeralKey)
+        {
+            auto const pqMaster = st.getFieldVL(sfQuantumMasterPublicKey);
+            auto const pqEphemeral = st.getFieldVL(sfQuantumPubKey);
+
+            if (pqMaster.size() != kPQPublicKeySize || pqEphemeral.size() != kPQPublicKeySize)
+                return std::nullopt;
+
+            quantumMasterKey.emplace(pqMaster.data(), pqMaster.size());
+            quantumSigningKey.emplace(pqEphemeral.data(), pqEphemeral.size());
         }
 
         std::string const serialized(reinterpret_cast<char const*>(s.data()), s.size());
 
         // If the manifest is revoked, then the signingKey will be unseated
-        return Manifest(serialized, masterKey, signingKey, seq, domain);
+        return Manifest(
+            serialized,
+            masterKey,
+            signingKey,
+            seq,
+            domain,
+            std::move(quantumMasterKey),
+            std::move(quantumSigningKey));
     }
     catch (std::exception const& ex)
     {
@@ -207,7 +253,31 @@ Manifest::verify() const
     if (!revoked() && !xrpl::verify(st, HashPrefix::Manifest, *signingKey))
         return false;
 
-    return xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature);
+    if (!xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature))
+        return false;
+
+    // Hybrid manifests: both PQ signatures must verify against the
+    // declared PQ master and ephemeral pubkeys. The deserializer
+    // guarantees all-four-or-none consistency, so the presence of
+    // quantumMasterKey is enough to imply the entire pair is set on `st`.
+    if (quantumMasterKey)
+    {
+        if (!xrpl::pqVerify(
+                st,
+                HashPrefix::Manifest,
+                Slice(quantumMasterKey->data(), quantumMasterKey->size()),
+                sfQuantumMasterSignature))
+            return false;
+
+        if (!xrpl::pqVerify(
+                st,
+                HashPrefix::Manifest,
+                Slice(quantumSigningKey->data(), quantumSigningKey->size()),
+                sfQuantumSignature))
+            return false;
+    }
+
+    return true;
 }
 
 uint256
@@ -290,8 +360,20 @@ loadValidatorToken(std::vector<std::string> const& blob, beast::Journal journal)
 
                 if (key && key->size() == 32)
                 {
+                    std::optional<Buffer> pqSecret;
+                    auto const pq = token.get("pq_validation_secret_key", json::Value{});
+                    if (pq.isString())
+                    {
+                        auto const pqBytes = strUnHex(pq.asString());
+                        if (!pqBytes || pqBytes->size() != kPQSecretKeySize)
+                            return std::nullopt;
+                        pqSecret.emplace(pqBytes->data(), pqBytes->size());
+                    }
+
                     return ValidatorToken{
-                        .manifest = m.asString(), .validationSecret = makeSlice(*key)};
+                        .manifest = m.asString(),
+                        .validationSecret = makeSlice(*key),
+                        .pqValidationSecret = std::move(pqSecret)};
                 }
             }
         }
@@ -315,6 +397,18 @@ ManifestCache::getSigningKey(PublicKey const& pk) const
         return iter->second.signingKey;
 
     return pk;
+}
+
+std::optional<Buffer>
+ManifestCache::getQuantumSigningKey(PublicKey const& pk) const
+{
+    std::shared_lock const lock{mutex_};
+    auto const iter = map_.find(pk);
+
+    if (iter != map_.end() && !iter->second.revoked())
+        return iter->second.quantumSigningKey;
+
+    return std::nullopt;
 }
 
 PublicKey
