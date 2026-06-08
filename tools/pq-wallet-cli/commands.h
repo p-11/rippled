@@ -8,4 +8,7 @@ namespace pqwallet::cmd {
 int
 keygen(int argc, char** argv);
 
+int
+signTx(int argc, char** argv);
+
 }  // namespace pqwallet::cmd

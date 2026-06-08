@@ -2,6 +2,7 @@ add_executable(
     pq-wallet-cli
     main.cpp
     commands.cpp
+    sign_tx.cpp
     ecc_custody_mock.cpp
     pq_keystore_mock.cpp
     wallet_state.cpp

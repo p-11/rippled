@@ -68,7 +68,9 @@ main(int argc, char** argv)
     {
         if (command == "keygen")
             return pqwallet::cmd::keygen(argc - 2, argv + 2);
-        if (command == "sign-tx" || command == "submit-tx" || command == "show-account")
+        if (command == "sign-tx")
+            return pqwallet::cmd::signTx(argc - 2, argv + 2);
+        if (command == "submit-tx" || command == "show-account")
             return runStub(command);
     }
     catch (std::exception const& e)
