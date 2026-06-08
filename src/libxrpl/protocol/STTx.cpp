@@ -489,7 +489,7 @@ Expected<void, std::string>
 multiSignHelper(
     STObject const& sigObject,
     std::optional<AccountID> txnAccountID,
-    std::function<Serializer(AccountID const&)> makeMsg,
+    std::function<Serializer(AccountID const&, Slice)> makeMsg,
     Rules const& rules)
 {
     // Make sure the MultiSigners are present.  Otherwise they are not
@@ -532,6 +532,33 @@ multiSignHelper(
         // The next signature must be greater than this one.
         lastAccountID = accountID;
 
+        // Detect a hybrid signer: both sfQuantumPubKey and sfQuantumSignature
+        // must appear together, or neither. A half-present pair would let an
+        // attacker drop one half and downgrade the signer back to ECC-only.
+        bool const hasPQPub = signer.isFieldPresent(sfQuantumPubKey);
+        bool const hasPQSig = signer.isFieldPresent(sfQuantumSignature);
+        if (hasPQPub != hasPQSig)
+            return Unexpected(
+                std::string("Mismatched post-quantum signature fields on account ") +
+                toBase58(accountID) + ".");
+
+        Blob pqPub, pqSig;
+        if (hasPQPub)
+        {
+            pqPub = signer.getFieldVL(sfQuantumPubKey);
+            pqSig = signer.getFieldVL(sfQuantumSignature);
+            if (pqPub.size() != kPQPublicKeySize || pqSig.size() != kPQSignatureSize)
+                return Unexpected(
+                    std::string("Invalid post-quantum field size on account ") +
+                    toBase58(accountID) + ".");
+        }
+
+        // Build the per-signer canonical payload. When the signer is hybrid,
+        // the PQ pubkey is appended after the AccountID so the ECC signature
+        // commits to it (the same binding STTx::sign enforces for single-sign).
+        Serializer const msg =
+            hasPQPub ? makeMsg(accountID, makeSlice(pqPub)) : makeMsg(accountID, Slice{});
+
         // Verify the signature.
         bool validSig = false;
         std::optional<std::string> errorWhat;
@@ -541,8 +568,7 @@ multiSignHelper(
             if (publicKeyType(makeSlice(spk)))
             {
                 Blob const signature = signer.getFieldVL(sfTxnSignature);
-                validSig = verify(
-                    PublicKey(makeSlice(spk)), makeMsg(accountID).slice(), makeSlice(signature));
+                validSig = verify(PublicKey(makeSlice(spk)), msg.slice(), makeSlice(signature));
             }
         }
         catch (std::exception const& e)
@@ -557,6 +583,11 @@ multiSignHelper(
                 std::string("Invalid signature on account ") + toBase58(accountID) +
                 errorWhat.value_or("") + ".");
         }
+
+        if (hasPQPub && !pqVerify(makeSlice(pqPub), msg.slice(), makeSlice(pqSig)))
+            return Unexpected(
+                std::string("Invalid post-quantum signature on account ") + toBase58(accountID) +
+                ".");
     }
     // All signatures verified.
     return {};
@@ -573,9 +604,9 @@ STTx::checkBatchMultiSign(STObject const& batchSigner, Rules const& rules) const
     return multiSignHelper(
         batchSigner,
         std::nullopt,
-        [&dataStart](AccountID const& accountID) -> Serializer {
+        [&dataStart](AccountID const& accountID, Slice pqPublicKey) -> Serializer {
             Serializer s = dataStart;
-            finishMultiSigningData(accountID, s);
+            finishMultiSigningData(accountID, pqPublicKey, s);
             return s;
         },
         rules);
@@ -598,9 +629,9 @@ STTx::checkMultiSign(Rules const& rules, STObject const& sigObject) const
     return multiSignHelper(
         sigObject,
         txnAccountID,
-        [&dataStart](AccountID const& accountID) -> Serializer {
+        [&dataStart](AccountID const& accountID, Slice pqPublicKey) -> Serializer {
             Serializer s = dataStart;
-            finishMultiSigningData(accountID, s);
+            finishMultiSigningData(accountID, pqPublicKey, s);
             return s;
         },
         rules);
