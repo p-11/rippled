@@ -41,6 +41,25 @@ return a deliberately-corrupted signature, so reviewers can confirm
 that the server-side hybrid binding gate is what makes the wallet's
 acceptance non-trivial.
 
+## Module boundary: the PQ keystore mock
+
+`PqKeystoreMock` (`pq_keystore_mock.{h,cpp}`) is the symmetric module
+on the PQ side, standing in for the "parallel key path that could
+later be backed by a PQ-capable module" the PoC project description asks for.
+It exposes the same shape as the ECC custody mock — `initializeFromPqSeed`,
+`publicKey`, `signWithPq` — so the production two-key custody model is
+visible in the code structure.
+
+Persistence stores only the 32-byte PQ seed; `pqKeypair` deterministically
+expands it into the full 1,440-byte public and 2,448-byte secret key on
+load. State lives in its own file (defaults to `./pq-wallet.pq.json`
+alongside `./pq-wallet.json`), with the same wallet-binary-never-opens-it
+discipline.
+
+Setting `PQ_KEYSTORE_FAIL=1` in the environment makes the PQ side of
+the signing path return a deliberately-corrupted signature, mirroring
+the `RIPPLE_CUSTODY_FAIL` hook for the ECC side.
+
 ## Build
 
 The tool is gated behind an opt-in CMake option so the default

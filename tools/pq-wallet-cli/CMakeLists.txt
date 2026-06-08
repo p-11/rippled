@@ -1,4 +1,4 @@
-add_executable(pq-wallet-cli main.cpp ecc_custody_mock.cpp)
+add_executable(pq-wallet-cli main.cpp ecc_custody_mock.cpp pq_keystore_mock.cpp)
 
 # The clang-format hook rewrites local includes from "x.h" to <x.h> across the
 # rippled tree. Listing the tool's own directory on the include path keeps the
