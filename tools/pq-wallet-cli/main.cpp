@@ -16,6 +16,7 @@ Usage:
 
 Commands:
   keygen          Generate (or import) the ECC + PQ keypair and persist wallet state.
+  opt-in          Register the wallet's PQ pubkey on its AccountRoot via AccountSet asfQuantum.
   sign-tx         Build, hybrid-sign, and emit a Payment transaction.
   submit-tx       Submit a previously signed tx_blob to a hybrid-aware rippled.
   show-account    Display the wallet's on-ledger AccountRoot, including QuantumPubKey.
@@ -66,6 +67,8 @@ main(int argc, char** argv)
             return pqwallet::cmd::submitTx(argc - 2, argv + 2);
         if (command == "show-account")
             return pqwallet::cmd::showAccount(argc - 2, argv + 2);
+        if (command == "opt-in")
+            return pqwallet::cmd::optIn(argc - 2, argv + 2);
     }
     catch (std::exception const& e)
     {

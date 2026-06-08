@@ -17,4 +17,7 @@ submitTx(int argc, char** argv);
 int
 showAccount(int argc, char** argv);
 
+int
+optIn(int argc, char** argv);
+
 }  // namespace pqwallet::cmd

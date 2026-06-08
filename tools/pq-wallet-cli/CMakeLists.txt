@@ -4,6 +4,7 @@ add_executable(
     commands.cpp
     sign_tx.cpp
     submit_show.cpp
+    opt_in.cpp
     rpc_client.cpp
     ecc_custody_mock.cpp
     pq_keystore_mock.cpp
