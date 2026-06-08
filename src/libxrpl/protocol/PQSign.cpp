@@ -18,6 +18,12 @@ pqSign(Slice secretKey, Slice msg)
     return mldsa::sign(msg, secretKey);
 }
 
+std::pair<Buffer, Buffer>
+pqKeypair(Slice seed)
+{
+    return mldsa::keypair(seed);
+}
+
 bool
 pqVerify(Slice publicKey, Slice msg, Slice sig) noexcept
 {

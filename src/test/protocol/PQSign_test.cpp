@@ -102,6 +102,44 @@ public:
         BEAST_EXPECT(pqVerify(st, HashPrefix::Validation, Slice(pqPub), sfQuantumSignature));
     }
 
+    static Buffer
+    makeSeed(std::uint8_t base)
+    {
+        Buffer seed(kPQSeedSize);
+        auto* p = seed.data();
+        for (std::size_t i = 0; i < kPQSeedSize; ++i)
+            p[i] = static_cast<std::uint8_t>(base ^ i);
+        return seed;
+    }
+
+    void
+    testKeypairFromSeedDeterministic()
+    {
+        testcase("pqKeypair(seed) is deterministic");
+
+        auto const seed = makeSeed(0x01);
+
+        auto const [pubA, secA] = pqKeypair(Slice(seed));
+        auto const [pubB, secB] = pqKeypair(Slice(seed));
+
+        BEAST_EXPECT(pubA.size() == kPQPublicKeySize);
+        BEAST_EXPECT(secA.size() == kPQSecretKeySize);
+        BEAST_EXPECT(Slice(pubA) == Slice(pubB));
+        BEAST_EXPECT(Slice(secA) == Slice(secB));
+    }
+
+    void
+    testKeypairFromSeedSignsAndVerifies()
+    {
+        testcase("Seed-derived keypair round-trips through pqSign/pqVerify");
+
+        auto const seed = makeSeed(0xA0);
+        auto const [pub, sec] = pqKeypair(Slice(seed));
+        auto st = makeSample(17);
+        pqSign(st, HashPrefix::Manifest, Slice(sec));
+        BEAST_EXPECT(pqVerify(st, HashPrefix::Manifest, Slice(pub)));
+    }
+
     void
     run() override
     {
@@ -111,6 +149,8 @@ public:
         testVerifyFailsOnTamperedBody();
         testWrongHashPrefixFails();
         testCustomSignatureField();
+        testKeypairFromSeedDeterministic();
+        testKeypairFromSeedSignsAndVerifies();
     }
 };
 

@@ -779,6 +779,64 @@ public:
     }
 
     void
+    testDilithiumWallet()
+    {
+        testcase("dilithium");
+
+        // PQ keypair size constants on the wire (hex-encoded):
+        // - 1312-byte pubkey  → 2624 hex chars
+        // - 2560-byte secret  → 5120 hex chars
+        // - 32-byte PQ seed   →   64 hex chars
+        constexpr std::size_t kPqPubHex = 1312 * 2;
+        constexpr std::size_t kPqSecHex = 2560 * 2;
+        constexpr std::size_t kPqSeedHex = 32 * 2;
+
+        // From-passphrase: full response shape and determinism.
+        {
+            json::Value params;
+            params[jss::key_type] = "dilithium";
+            params[jss::passphrase] = "masterpassphrase";
+
+            auto result = walletPropose(params);
+            BEAST_EXPECT(!containsError(result));
+            BEAST_EXPECT(result[jss::key_type].asString() == "dilithium");
+            BEAST_EXPECT(result.isMember(jss::master_seed));
+            BEAST_EXPECT(result.isMember(jss::master_seed_hex));
+            BEAST_EXPECT(result.isMember(jss::master_key));
+            BEAST_EXPECT(result.isMember(jss::pq_seed_hex));
+            BEAST_EXPECT(result.isMember(jss::public_key_hex));
+            BEAST_EXPECT(result.isMember(jss::secret_key_hex));
+            // PQ keys are not account keys.
+            BEAST_EXPECT(!result.isMember(jss::account_id));
+            BEAST_EXPECT(!result.isMember(jss::public_key));
+
+            BEAST_EXPECT(result[jss::pq_seed_hex].asString().size() == kPqSeedHex);
+            BEAST_EXPECT(result[jss::public_key_hex].asString().size() == kPqPubHex);
+            BEAST_EXPECT(result[jss::secret_key_hex].asString().size() == kPqSecHex);
+
+            // Same passphrase → same derived material.
+            auto const again = walletPropose(params);
+            BEAST_EXPECT(again[jss::pq_seed_hex].asString() == result[jss::pq_seed_hex].asString());
+            BEAST_EXPECT(
+                again[jss::public_key_hex].asString() == result[jss::public_key_hex].asString());
+            BEAST_EXPECT(
+                again[jss::secret_key_hex].asString() == result[jss::secret_key_hex].asString());
+        }
+
+        // No-input dilithium: fresh random seed each call.
+        {
+            json::Value params;
+            params[jss::key_type] = "dilithium";
+
+            auto const r1 = walletPropose(params);
+            auto const r2 = walletPropose(params);
+            BEAST_EXPECT(!containsError(r1));
+            BEAST_EXPECT(!containsError(r2));
+            BEAST_EXPECT(r1[jss::pq_seed_hex].asString() != r2[jss::pq_seed_hex].asString());
+        }
+    }
+
+    void
     run() override
     {
         testKeyType(std::nullopt, kSecP256K1Strings);
@@ -793,6 +851,7 @@ public:
         testKeypairForSignature(std::string("secp256k1"), kStrongBrainStrings);
 
         testXrplLibEd25519();
+        testDilithiumWallet();
 
         testKeypairForSignatureErrors();
     }

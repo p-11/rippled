@@ -411,6 +411,18 @@ ManifestCache::getQuantumSigningKey(PublicKey const& pk) const
     return std::nullopt;
 }
 
+std::optional<Buffer>
+ManifestCache::getQuantumMasterKey(PublicKey const& pk) const
+{
+    std::shared_lock const lock{mutex_};
+    auto const iter = map_.find(pk);
+
+    if (iter != map_.end() && !iter->second.revoked())
+        return iter->second.quantumMasterKey;
+
+    return std::nullopt;
+}
+
 PublicKey
 ManifestCache::getMasterKey(PublicKey const& pk) const
 {

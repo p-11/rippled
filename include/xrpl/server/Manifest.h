@@ -302,6 +302,21 @@ public:
     std::optional<Buffer>
     getQuantumSigningKey(PublicKey const& pk) const;
 
+    /** Returns master key's PQ master public key, if declared.
+
+        @param pk Master public key
+
+        @return Engaged optional with the ML-DSA-44 master pubkey bytes
+                when the active manifest for `pk` is hybrid; std::nullopt
+                otherwise.
+
+        @par Thread Safety
+
+        May be called concurrently
+    */
+    std::optional<Buffer>
+    getQuantumMasterKey(PublicKey const& pk) const;
+
     /** Returns ephemeral signing key's master public key.
 
         @param pk Ephemeral signing public key

@@ -17,6 +17,15 @@ namespace xrpl {
 inline constexpr std::size_t kPQPublicKeySize = mldsa::kPublicKeySize;
 inline constexpr std::size_t kPQSecretKeySize = mldsa::kSecretKeySize;
 inline constexpr std::size_t kPQSignatureSize = mldsa::kSignatureSize;
+inline constexpr std::size_t kPQSeedSize = mldsa::kSeedSize;
+
+/** Deterministic post-quantum keypair from a 32-byte seed.
+
+    Protocol-layer wrapper around xrpl::mldsa::keypair(Slice). Same
+    return shape (first = public key, second = secret key).
+*/
+[[nodiscard]] std::pair<Buffer, Buffer>
+pqKeypair(Slice seed);
 
 /** Produce a post-quantum signature over `msg` using `secretKey`.
 
