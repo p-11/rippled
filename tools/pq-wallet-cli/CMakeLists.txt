@@ -3,6 +3,8 @@ add_executable(
     main.cpp
     commands.cpp
     sign_tx.cpp
+    submit_show.cpp
+    rpc_client.cpp
     ecc_custody_mock.cpp
     pq_keystore_mock.cpp
     wallet_state.cpp

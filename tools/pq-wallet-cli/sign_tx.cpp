@@ -16,6 +16,7 @@
 #include <defaults.h>
 #include <ecc_custody_mock.h>
 #include <pq_keystore_mock.h>
+#include <rpc_client.h>
 #include <wallet_state.h>
 
 #include <cstdlib>
@@ -39,6 +40,7 @@ struct SignTxArgs
     std::optional<std::string> amountDrops;
     std::optional<std::uint32_t> sequence;
     std::uint32_t feeDrops{defaults::kFeeDrops};
+    std::string rpcUrl{defaults::kRpcUrl};
 };
 
 SignTxArgs
@@ -72,6 +74,10 @@ parseSignTxArgs(int argc, char** argv)
         {
             out.feeDrops = args::parseU32(argv[++i], "--fee");
         }
+        else if (a == "--rpc-url" && i + 1 < argc && argv[i + 1][0] != '-')
+        {
+            out.rpcUrl = argv[++i];
+        }
         else
         {
             throw std::runtime_error(
@@ -82,10 +88,6 @@ parseSignTxArgs(int argc, char** argv)
         throw std::runtime_error("sign-tx: --to <address> is required");
     if (!out.amountDrops)
         throw std::runtime_error("sign-tx: --amount-drops <n> is required");
-    if (!out.sequence)
-        throw std::runtime_error(
-            "sign-tx: --sequence <n> is required (later commits add an "
-            "account_info auto-fetch via the JSON-RPC client)");
     return out;
 }
 
@@ -96,6 +98,8 @@ signTx(int argc, char** argv)
 {
     auto const args = parseSignTxArgs(argc, argv);
     auto const wallet = state::load(args.walletPath);
+    auto const sequence =
+        args.sequence ? *args.sequence : rpc::fetchSequence(args.rpcUrl, wallet.accountId);
 
     custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
     custodyMock.load();
@@ -113,7 +117,7 @@ signTx(int argc, char** argv)
     tx[xrpl::jss::Destination] = *args.toAddress;
     tx[xrpl::jss::Amount] = *args.amountDrops;
     tx[xrpl::jss::Fee] = std::to_string(args.feeDrops);
-    tx[xrpl::jss::Sequence] = *args.sequence;
+    tx[xrpl::jss::Sequence] = sequence;
     tx[xrpl::jss::SigningPubKey] = eccPubHex;
 
     xrpl::STParsedJSONObject parsed("tx_json", tx);
@@ -176,7 +180,7 @@ signTx(int argc, char** argv)
     std::cout << "  account_id      : " << wallet.accountId << '\n';
     std::cout << "  destination     : " << *args.toAddress << '\n';
     std::cout << "  amount_drops    : " << *args.amountDrops << '\n';
-    std::cout << "  sequence        : " << *args.sequence << '\n';
+    std::cout << "  sequence        : " << sequence << '\n';
     std::cout << "  fee_drops       : " << args.feeDrops << '\n';
     std::cout << "  tx_hash         : " << txHash << '\n';
     std::cout << "  sidecar         : " << args.outPath.string() << '\n';

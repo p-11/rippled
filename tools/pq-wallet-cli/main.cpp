@@ -37,14 +37,6 @@ the PQ side where a PQ-capable HSM would plug in. See README.md for the
 full conceptual mapping.
 )usage";
 
-int
-runStub(std::string_view command)
-{
-    std::cerr << "pq-wallet-cli: '" << command
-              << "' is not implemented yet in this scaffolding commit.\n";
-    return EXIT_FAILURE;
-}
-
 }  // namespace
 
 int
@@ -70,8 +62,10 @@ main(int argc, char** argv)
             return pqwallet::cmd::keygen(argc - 2, argv + 2);
         if (command == "sign-tx")
             return pqwallet::cmd::signTx(argc - 2, argv + 2);
-        if (command == "submit-tx" || command == "show-account")
-            return runStub(command);
+        if (command == "submit-tx")
+            return pqwallet::cmd::submitTx(argc - 2, argv + 2);
+        if (command == "show-account")
+            return pqwallet::cmd::showAccount(argc - 2, argv + 2);
     }
     catch (std::exception const& e)
     {

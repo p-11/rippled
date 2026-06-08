@@ -11,4 +11,10 @@ keygen(int argc, char** argv);
 int
 signTx(int argc, char** argv);
 
+int
+submitTx(int argc, char** argv);
+
+int
+showAccount(int argc, char** argv);
+
 }  // namespace pqwallet::cmd
