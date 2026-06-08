@@ -1,5 +1,8 @@
+#include <commands.h>
+
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -61,10 +64,17 @@ main(int argc, char** argv)
         return EXIT_SUCCESS;
     }
 
-    if (command == "keygen" || command == "sign-tx" || command == "submit-tx" ||
-        command == "show-account")
+    try
     {
-        return runStub(command);
+        if (command == "keygen")
+            return pqwallet::cmd::keygen(argc - 2, argv + 2);
+        if (command == "sign-tx" || command == "submit-tx" || command == "show-account")
+            return runStub(command);
+    }
+    catch (std::exception const& e)
+    {
+        std::cerr << "pq-wallet-cli: " << command << " failed: " << e.what() << '\n';
+        return EXIT_FAILURE;
     }
 
     std::cerr << "pq-wallet-cli: unknown command '" << command << "'.\n\n";
