@@ -13,6 +13,7 @@
 #include <xrpl/protocol/Indexes.h>
 #include <xrpl/protocol/Keylet.h>
 #include <xrpl/protocol/LedgerFormats.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STArray.h>
 #include <xrpl/protocol/STLedgerEntry.h>
@@ -104,6 +105,47 @@ SignerListSet::preflight(PreflightContext const& ctx)
         }
     }
 
+    return tesSUCCESS;
+}
+
+TER
+SignerListSet::preclaim(PreclaimContext const& ctx)
+{
+    // Quantum: when the source has already opted in to hybrid signing,
+    // a replacement list must remain authenticatable. Every entry needs
+    // a PQ pubkey reachable from either the SignerEntry itself or the
+    // signer's own AccountRoot; otherwise the per-signer authentication
+    // would reject every subsequent multi-sign, locking the account out.
+    //
+    // We walk the raw sfSignerEntries array directly rather than
+    // re-running determineOperation, which would re-deserialize the
+    // entries into a fresh vector and bump per-tx allocator pressure
+    // up to ~125 KiB for a 32-signer hybrid list. preCompute() already
+    // deserializes once for doApply.
+    if (!ctx.view.rules().enabled(featureQuantum))
+        return tesSUCCESS;
+
+    auto const id = ctx.tx.getAccountID(sfAccount);
+    auto const sleSource = ctx.view.read(keylet::account(id));
+    if (!sleSource || !sleSource->isFieldPresent(sfQuantumPubKey))
+        return tesSUCCESS;
+
+    if (!ctx.tx.isFieldPresent(sfSignerEntries) || ctx.tx[sfSignerQuorum] == 0u)
+        return tesSUCCESS;
+
+    for (auto const& entry : ctx.tx.getFieldArray(sfSignerEntries))
+    {
+        if (entry.isFieldPresent(sfQuantumPubKey))
+            continue;
+        auto const signerAcct = entry.getAccountID(sfAccount);
+        auto const sleSigner = ctx.view.read(keylet::account(signerAcct));
+        if (!sleSigner || !sleSigner->isFieldPresent(sfQuantumPubKey))
+        {
+            JLOG(ctx.j.trace()) << "SignerListSet: signer " << toBase58(signerAcct)
+                                << " has no registered PQ pubkey; source is quantum opted in.";
+            return tecNO_ALTERNATIVE_KEY;
+        }
+    }
     return tesSUCCESS;
 }
 
@@ -288,6 +330,22 @@ SignerListSet::validateQuorumAndSignerEntries(
         }
         // Don't verify that the signer accounts exist.  Non-existent accounts
         // may be phantom accounts (which are permitted).
+
+        if (signer.pqPub)
+        {
+            if (!rules.enabled(featureQuantum))
+            {
+                JLOG(j.trace()) << "Post-quantum signer entries require the "
+                                   "Quantum amendment.";
+                return temDISABLED;
+            }
+            if (signer.pqPub->size() != kPQPublicKeySize)
+            {
+                JLOG(j.trace()) << "Post-quantum public key on signer entry "
+                                   "has invalid size.";
+                return temMALFORMED;
+            }
+        }
     }
     if ((quorum <= 0) || (allSignersWeight < quorum))
     {
@@ -399,6 +457,9 @@ SignerListSet::writeSignersToSLE(SLE::pointer const& ledgerEntry, std::uint32_t 
         // a tag into the ledger.
         if (entry.tag)
             obj.setFieldH256(sfWalletLocator, *(entry.tag));
+
+        if (entry.pqPub)
+            obj.setFieldVL(sfQuantumPubKey, *(entry.pqPub));
     }
 
     // Assign the SignerEntries.

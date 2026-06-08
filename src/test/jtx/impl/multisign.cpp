@@ -43,6 +43,8 @@ signers(Account const& account, std::uint32_t quorum, std::vector<Signer> const&
         je[sfSignerWeight.getJsonName()] = e.weight;
         if (e.tag)
             je[sfWalletLocator.getJsonName()] = to_string(*e.tag);
+        if (e.pqPub)
+            je[sfQuantumPubKey.getJsonName()] = strHex(*e.pqPub);
     }
     return jv;
 }
