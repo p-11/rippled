@@ -13,7 +13,7 @@
 
 #include <defaults.h>
 #include <ecc_custody_mock.h>
-#include <pq_keystore_mock.h>
+#include <pq_custody_mock.h>
 #include <wallet_state.h>
 
 #include <cstdlib>
@@ -117,7 +117,7 @@ keygen(int argc, char** argv)
         pqSeedBytes.assign(pqSeedHash.data(), pqSeedHash.data() + pqSeedHash.size());
     }
 
-    pqstore::PqKeystoreMock pqMock(state::pqStateFileFor(args.walletPath));
+    custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
     pqMock.initializeFromPqSeed(xrpl::Slice(pqSeedBytes.data(), pqSeedBytes.size()));
 
     auto const pqPub = pqMock.publicKey();
@@ -141,7 +141,7 @@ keygen(int argc, char** argv)
               << pqPubHex.size() / 2 << " bytes)\n";
     std::cout << "  wallet state file       : " << args.walletPath.string() << '\n';
     std::cout << "  ECC custody state file  : " << custodyMock.stateFile().string() << '\n';
-    std::cout << "  PQ keystore state file  : " << pqMock.stateFile().string() << '\n';
+    std::cout << "  PQ custody state file   : " << pqMock.stateFile().string() << '\n';
     return EXIT_SUCCESS;
 }
 

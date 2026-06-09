@@ -24,7 +24,7 @@ Commands:
 Common options:
   --wallet <path>     Wallet state file. Defaults to ./pq-wallet.json.
                       Secret material lives in <path>.custody.json (ECC mock)
-                      and <path>.pq.json (PQ keystore mock); the wallet binary
+                      and <path>.pq.json (PQ custody mock); the wallet binary
                       never opens those files directly.
   --rpc-url <url>     Hybrid-aware rippled JSON-RPC endpoint.
                       Defaults to http://127.0.0.1:5050 (the standalone-mode

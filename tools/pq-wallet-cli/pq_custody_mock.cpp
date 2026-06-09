@@ -1,4 +1,4 @@
-#include <pq_keystore_mock.h>
+#include <pq_custody_mock.h>
 
 #include <xrpl/basics/StringUtilities.h>
 #include <xrpl/basics/strHex.h>
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace pqwallet::pqstore {
+namespace pqwallet::custody {
 
 namespace {
 
@@ -26,24 +26,24 @@ constexpr char const* kPublicKeyField = "public_key_hex";
 bool
 pqFailRequested()
 {
-    char const* env = std::getenv("PQ_KEYSTORE_FAIL");
+    char const* env = std::getenv("PQ_CUSTODY_FAIL");
     return env != nullptr && std::string_view{env} == "1";
 }
 
 }  // namespace
 
-PqKeystoreMock::PqKeystoreMock(std::filesystem::path stateFile) : stateFile_(std::move(stateFile))
+PqCustodyMock::PqCustodyMock(std::filesystem::path stateFile) : stateFile_(std::move(stateFile))
 {
 }
 
 bool
-PqKeystoreMock::exists() const
+PqCustodyMock::exists() const
 {
     return std::filesystem::exists(stateFile_);
 }
 
 void
-PqKeystoreMock::initializeFromPqSeed(xrpl::Slice seed)
+PqCustodyMock::initializeFromPqSeed(xrpl::Slice seed)
 {
     if (seed.size() != xrpl::kPQSeedSize)
         throw std::runtime_error(
@@ -57,13 +57,13 @@ PqKeystoreMock::initializeFromPqSeed(xrpl::Slice seed)
 }
 
 void
-PqKeystoreMock::load()
+PqCustodyMock::load()
 {
     std::ifstream in(stateFile_);
     if (!in)
     {
         std::ostringstream msg;
-        msg << "PQ keystore state file '" << stateFile_.string()
+        msg << "PQ custody state file '" << stateFile_.string()
             << "' is missing. Run 'keygen' first.";
         throw std::runtime_error(msg.str());
     }
@@ -74,38 +74,38 @@ PqKeystoreMock::load()
     json::Reader reader;
     if (!reader.parse(ss.str(), root))
         throw std::runtime_error(
-            "PQ keystore state file is not valid JSON: " + reader.getFormattedErrorMessages());
+            "PQ custody state file is not valid JSON: " + reader.getFormattedErrorMessages());
 
     auto const algo = root.get(kAlgorithmField, "").asString();
     if (algo != kAlgorithmValue)
-        throw std::runtime_error("PQ keystore has unsupported algorithm: '" + algo + "'");
+        throw std::runtime_error("PQ custody has unsupported algorithm: '" + algo + "'");
 
     auto const seedHex = root.get(kPqSeedField, "").asString();
     if (seedHex.empty())
-        throw std::runtime_error("PQ keystore is missing pq_seed_hex");
+        throw std::runtime_error("PQ custody is missing pq_seed_hex");
 
     auto const seedBytes = xrpl::strUnHex(seedHex);
     if (!seedBytes)
-        throw std::runtime_error("PQ keystore pq_seed_hex is malformed");
+        throw std::runtime_error("PQ custody pq_seed_hex is malformed");
     initializeFromPqSeed(xrpl::Slice(seedBytes->data(), seedBytes->size()));
 }
 
 xrpl::Buffer
-PqKeystoreMock::publicKey() const
+PqCustodyMock::publicKey() const
 {
     if (!publicKey_)
         throw std::runtime_error(
-            "PQ keystore is uninitialized; call load() or "
+            "PQ custody is uninitialized; call load() or "
             "initializeFromPqSeed() first");
     return *publicKey_;
 }
 
 xrpl::Buffer
-PqKeystoreMock::signWithPq(xrpl::Slice payload) const
+PqCustodyMock::signWithPq(xrpl::Slice payload) const
 {
     if (!secretKey_)
         throw std::runtime_error(
-            "PQ keystore is uninitialized; call load() or "
+            "PQ custody is uninitialized; call load() or "
             "initializeFromPqSeed() first");
 
     auto sig = xrpl::pqSign(xrpl::Slice(secretKey_->data(), secretKey_->size()), payload);
@@ -120,16 +120,16 @@ PqKeystoreMock::signWithPq(xrpl::Slice payload) const
 }
 
 std::filesystem::path const&
-PqKeystoreMock::stateFile() const noexcept
+PqCustodyMock::stateFile() const noexcept
 {
     return stateFile_;
 }
 
 void
-PqKeystoreMock::persist() const
+PqCustodyMock::persist() const
 {
     if (!pqSeed_ || !publicKey_)
-        throw std::runtime_error("PqKeystoreMock::persist called before keys were initialized");
+        throw std::runtime_error("PqCustodyMock::persist called before keys were initialized");
 
     json::Value root(json::ValueType::Object);
     root[kAlgorithmField] = kAlgorithmValue;
@@ -143,12 +143,12 @@ PqKeystoreMock::persist() const
     std::ofstream out(stateFile_);
     if (!out)
         throw std::runtime_error(
-            "Cannot open PQ keystore state file for writing: " + stateFile_.string());
+            "Cannot open PQ custody state file for writing: " + stateFile_.string());
 
     json::StyledWriter writer;
     out << writer.write(root);
     if (!out)
-        throw std::runtime_error("Failed to write PQ keystore state file: " + stateFile_.string());
+        throw std::runtime_error("Failed to write PQ custody state file: " + stateFile_.string());
 }
 
-}  // namespace pqwallet::pqstore
+}  // namespace pqwallet::custody

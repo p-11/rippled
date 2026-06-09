@@ -15,7 +15,7 @@
 #include <commands.h>
 #include <defaults.h>
 #include <ecc_custody_mock.h>
-#include <pq_keystore_mock.h>
+#include <pq_custody_mock.h>
 #include <rpc_client.h>
 #include <wallet_state.h>
 
@@ -104,7 +104,7 @@ signTx(int argc, char** argv)
     custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
     custodyMock.load();
 
-    pqstore::PqKeystoreMock pqMock(state::pqStateFileFor(args.walletPath));
+    custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
     pqMock.load();
 
     // SigningPubKey is set up front to satisfy the tx template when the

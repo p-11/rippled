@@ -7,7 +7,7 @@ add_executable(
     opt_in.cpp
     rpc_client.cpp
     ecc_custody_mock.cpp
-    pq_keystore_mock.cpp
+    pq_custody_mock.cpp
     wallet_state.cpp
 )
 

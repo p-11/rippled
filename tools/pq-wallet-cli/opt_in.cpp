@@ -14,7 +14,7 @@
 #include <commands.h>
 #include <defaults.h>
 #include <ecc_custody_mock.h>
-#include <pq_keystore_mock.h>
+#include <pq_custody_mock.h>
 #include <rpc_client.h>
 #include <wallet_state.h>
 
@@ -82,7 +82,7 @@ optIn(int argc, char** argv)
 
     custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
     custodyMock.load();
-    pqstore::PqKeystoreMock pqMock(state::pqStateFileFor(args.walletPath));
+    custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
     pqMock.load();
 
     auto const eccPubHex = xrpl::strHex(custodyMock.publicKey());

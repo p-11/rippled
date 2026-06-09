@@ -95,15 +95,15 @@ return a deliberately corrupted signature, which `run-demo.sh` uses
 to demonstrate that the server's hybrid verification is what gates
 acceptance.
 
-## Module boundary: the PQ keystore mock
+## Module boundary: the PQ custody mock
 
-`PqKeystoreMock` (`pq_keystore_mock.{h,cpp}`) is the symmetric module
+`PqCustodyMock` (`pq_custody_mock.{h,cpp}`) is the symmetric module
 on the PQ side, standing in for the "parallel key path that could
 later be backed by a PQ-capable module" the PoC project description asks
 for. It exposes the same shape as the ECC custody mock
 (`initializeFromPqSeed`, `publicKey`, `signWithPq`) so the
 production two-key custody model is visible directly in the code
-structure.
+structure. Both mocks live in the same `pqwallet::custody` namespace.
 
 Persistence stores only the 32-byte PQ seed; `xrpl::pqKeypair`
 deterministically expands it back to the full 1,312-byte ML-DSA-44
@@ -111,5 +111,5 @@ public key and 2,560-byte secret key on load. State lives in
 `./pq-wallet.pq.json` with the same wallet-binary-never-opens-it
 discipline.
 
-Setting `PQ_KEYSTORE_FAIL=1` mirrors `RIPPLE_CUSTODY_FAIL` for the
+Setting `PQ_CUSTODY_FAIL=1` mirrors `RIPPLE_CUSTODY_FAIL` for the
 PQ side.
