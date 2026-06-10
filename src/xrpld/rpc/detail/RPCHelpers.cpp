@@ -262,25 +262,12 @@ keypairForSignature(json::Value const& params, json::Value& error, unsigned int 
 
         keyType = keyTypeFromString(params[jss::key_type].asString());
 
-        if (!keyType)
-        {
-            if (apiVersion > 1u)
-            {
-                error = RPC::makeError(RpcBadKeyType);
-            }
-            else
-            {
-                error = RPC::invalidFieldError(jss::key_type);
-            }
-            return {};
-        }
-
-        // ML-DSA keys cannot drive the ECC signing path; the PQ half of a
-        // hybrid signature is requested via pq_seed_hex instead. Reject the
-        // key type here so the request fails as a parameter error rather than
-        // tripping the secp256k1/ed25519-only guard below, which terminates
-        // the process via logicError.
-        if (*keyType == KeyType::Dilithium)
+        // Reject an unknown key type, and Dilithium: ML-DSA keys cannot drive
+        // the ECC signing path (the PQ half of a hybrid signature is requested
+        // via pq_seed_hex instead), and letting Dilithium through would trip
+        // the secp256k1/ed25519-only guard below, which terminates the process
+        // via logicError.
+        if (!keyType || *keyType == KeyType::Dilithium)
         {
             if (apiVersion > 1u)
             {

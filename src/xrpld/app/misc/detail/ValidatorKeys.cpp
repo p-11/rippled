@@ -43,26 +43,32 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             bool const manifestHybrid = m && m->quantumMasterKey && m->quantumSigningKey;
             bool const tokenHybrid = token->pqValidationSecret.has_value();
 
+            // The token's PQ secret must produce signatures the manifest's
+            // declared PQ ephemeral verifies. There is no sk->pk derivation
+            // helper for ML-DSA, so prove correspondence with a sign/verify
+            // round-trip. Without this, a mismatched secret starts up cleanly
+            // and every validation we emit is silently dropped by all peers.
+            // Guard the deref of both optionals: only sign/verify when the
+            // manifest declares a PQ ephemeral AND the token carries a PQ
+            // secret (a manifest/token hybrid-ness mismatch is rejected
+            // separately below).
+            Slice const probe{kPqProbe, sizeof(kPqProbe) - 1};
+            bool const pqSecretMatchesManifest =
+                manifestHybrid && tokenHybrid &&
+                pqVerify(
+                    Slice{m->quantumSigningKey->data(), m->quantumSigningKey->size()},
+                    probe,
+                    pqSign(
+                        Slice{token->pqValidationSecret->data(), token->pqValidationSecret->size()},
+                        probe));
+
             if (!m || pk != m->signingKey || (manifestHybrid != tokenHybrid))
             {
                 configInvalid_ = true;
                 JLOG(j.fatal()) << "Invalid token specified in [" SECTION_VALIDATOR_TOKEN "]";
             }
-            else if (
-                manifestHybrid &&
-                !pqVerify(
-                    Slice{m->quantumSigningKey->data(), m->quantumSigningKey->size()},
-                    Slice{kPqProbe, sizeof(kPqProbe) - 1},
-                    pqSign(
-                        Slice{token->pqValidationSecret->data(), token->pqValidationSecret->size()},
-                        Slice{kPqProbe, sizeof(kPqProbe) - 1})))
+            else if (manifestHybrid && !pqSecretMatchesManifest)
             {
-                // The token's PQ secret must produce signatures the manifest's
-                // declared PQ ephemeral verifies. There is no sk->pk derivation
-                // helper for ML-DSA, so prove correspondence with a
-                // sign/verify round-trip. Without this, a mismatched secret
-                // starts up cleanly and every validation we emit is silently
-                // dropped by all peers.
                 configInvalid_ = true;
                 JLOG(j.fatal()) << "PQ validation secret does not match the manifest "
                                    "PQ ephemeral key in [" SECTION_VALIDATOR_TOKEN "]";
