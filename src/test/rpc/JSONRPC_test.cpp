@@ -2898,6 +2898,18 @@ public:
             BEAST_EXPECT(RPC::containsError(result));
         }
 
+        // key_type=dilithium cannot drive the ECC signing path; it must be
+        // rejected as a bad key type, not crash the server (the guard in
+        // keypairForSignature terminates via logicError).
+        {
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(env.master);
+            toSign[jss::key_type] = "dilithium";
+            toSign[jss::seed] = wpResult[jss::master_seed].asString();
+            auto const result = env.rpc("json", "sign", to_string(toSign))[jss::result];
+            BEAST_EXPECT(RPC::containsError(result));
+        }
+
         // ECC-only sign keeps producing ECC-only blobs (regression).
         {
             json::Value toSign;
