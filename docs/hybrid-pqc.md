@@ -58,7 +58,7 @@ if that PQ pubkey is not the expected one for the signer.
 | Transaction (multi-sign)  | `AccountRoot.sfQuantumPubKey` of each signer, or `SignerEntry.sfQuantumPubKey` on the source's SignerList (phantom signers) | `Transactor::checkMultiSign`       |
 | Manifest (ephemeral)      | `sfQuantumMasterPublicKey` published on the same manifest                                                                   | `Manifest::verify`                 |
 | Validation                | `manifest.quantumSigningKey` for the validator's master                                                                     | `PeerImp::onMessage(TMValidation)` |
-| Consensus proposal        | (no external reference; ECC trust gate covers the binding)                                                                  | `RCLCxPeerPos::checkSign`          |
+| Consensus proposal        | `manifest.quantumSigningKey` for the proposer's master                                                                      | `PeerImp::onMessage(TMProposeSet)` |
 
 Mismatch is a hard reject regardless of any operator configuration.
 A missing PQ on a hybrid-declared validator is governed by the
@@ -135,15 +135,25 @@ clear-signal cannot reach `doApply`. The flag-operation pattern
 **Validator manifests sign with all four keys.** The manifest carries
 ECC master, ECC ephemeral, PQ master, PQ ephemeral. Both PQ pubkeys
 are signing fields (not NotSigning), so the ECC signatures commit to
-them; an attacker cannot strip the PQ half without also breaking the
-ECC half.
+them; an attacker cannot strip the PQ half from an existing manifest
+without also breaking the ECC half. The complementary attack, an
+attacker with the recovered ECC master secret minting a _fresh_
+higher-sequence ECC-only manifest, is blocked separately by the
+PQ-master continuity rule in `ManifestCache::applyManifest`: once a
+master key has published a hybrid manifest, every later
+non-revocation manifest must keep the same PQ master key.
 
-**Fail-open is the default.** The protocol-level binding gates
-(validation PQ pubkey must match the manifest's published value, tx
-PQ pubkey must match `AccountRoot`'s registered value) already close
-the substitution case. `fail_closed` is a hardening lever for
-operators of fully-hybrid networks who want ECC-only validations
-dropped before any verification cost.
+**Fail-open is the default, and it covers substitution but not
+stripping.** The binding gates reject a validation or proposal whose
+PQ pubkey is _present but mismatched_ against the manifest's published
+value, regardless of configuration. They do not, under `fail_open`,
+reject a message from a hybrid-declared validator that omits the PQ
+fields entirely: an attacker holding the validator's ECC ephemeral
+secret can still mint accepted ECC-only validations/proposals. Closing
+that stripping window is exactly what `fail_closed` does, so
+fully-hybrid networks should run with it. `fail_open` is the
+deliberate mixed-network rollout default, not a protocol-level
+guarantee that the PQ half cannot be dropped.
 
 **Determinism for tooling.** `wallet_propose key_type=dilithium`
 derives the PQ keypair deterministically from the same passphrase /
