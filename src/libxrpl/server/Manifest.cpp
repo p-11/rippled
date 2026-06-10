@@ -249,12 +249,23 @@ Manifest::verify() const
     if (!revoked() && !signingKey)
         return false;
 
+    // Serialize the signing payload once and verify all (up to four)
+    // signatures against the same bytes, instead of re-serializing the
+    // manifest inside each xrpl::verify / pqVerify call. Signatures are read
+    // zero-copy via operator[] rather than getFieldVL, which matters for the
+    // 2420-byte PQ signatures on this per-manifest verify path (peer
+    // handshake, manifest relay, UNL refresh).
+    Serializer ss;
+    ss.add32(HashPrefix::Manifest);
+    st.addWithoutSigningFields(ss);
+    Slice const payload{ss.data(), ss.size()};
+
     // Signing key and signature are not required for
     // master key revocations
-    if (!revoked() && !xrpl::verify(st, HashPrefix::Manifest, *signingKey))
+    if (!revoked() && !xrpl::verify(*signingKey, payload, st[sfSignature]))
         return false;
 
-    if (!xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature))
+    if (!xrpl::verify(masterKey, payload, st[sfMasterSignature]))
         return false;
 
     // Hybrid manifests: both PQ signatures must verify against the
@@ -264,17 +275,15 @@ Manifest::verify() const
     if (quantumMasterKey)
     {
         if (!xrpl::pqVerify(
-                st,
-                HashPrefix::Manifest,
                 Slice(quantumMasterKey->data(), quantumMasterKey->size()),
-                sfQuantumMasterSignature))
+                payload,
+                st[sfQuantumMasterSignature]))
             return false;
 
         if (!xrpl::pqVerify(
-                st,
-                HashPrefix::Manifest,
                 Slice(quantumSigningKey->data(), quantumSigningKey->size()),
-                sfQuantumSignature))
+                payload,
+                st[sfQuantumSignature]))
             return false;
     }
 

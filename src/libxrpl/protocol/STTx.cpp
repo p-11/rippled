@@ -456,9 +456,12 @@ singleSignHelper(STObject const& sigObject, Slice const& data)
     {
         try
         {
-            Blob const pqPub = sigObject.getFieldVL(sfQuantumPubKey);
-            Blob const pqSig = sigObject.getFieldVL(sfQuantumSignature);
-            if (!pqVerify(makeSlice(pqPub), data, makeSlice(pqSig)))
+            // Zero-copy reads: the PQ pubkey (1312 B) and signature (2420 B)
+            // are only consumed by pqVerify, so a getFieldVL heap copy per
+            // tx is pure waste on this per-transaction verify path.
+            Slice const pqPub = sigObject[sfQuantumPubKey];
+            Slice const pqSig = sigObject[sfQuantumSignature];
+            if (!pqVerify(pqPub, data, pqSig))
                 return Unexpected("Invalid post-quantum signature.");
         }
         catch (std::exception const&)
@@ -542,11 +545,13 @@ multiSignHelper(
                 std::string("Mismatched post-quantum signature fields on account ") +
                 toBase58(accountID) + ".");
 
-        Blob pqPub, pqSig;
+        // Zero-copy reads of the PQ blobs (1312 B + 2420 B per hybrid signer);
+        // they are only consumed by makeMsg and pqVerify below.
+        Slice pqPub{}, pqSig{};
         if (hasPQPub)
         {
-            pqPub = signer.getFieldVL(sfQuantumPubKey);
-            pqSig = signer.getFieldVL(sfQuantumSignature);
+            pqPub = signer[sfQuantumPubKey];
+            pqSig = signer[sfQuantumSignature];
             if (pqPub.size() != kPQPublicKeySize || pqSig.size() != kPQSignatureSize)
                 return Unexpected(
                     std::string("Invalid post-quantum field size on account ") +
@@ -556,8 +561,7 @@ multiSignHelper(
         // Build the per-signer canonical payload. When the signer is hybrid,
         // the PQ pubkey is appended after the AccountID so the ECC signature
         // commits to it (the same binding STTx::sign enforces for single-sign).
-        Serializer const msg =
-            hasPQPub ? makeMsg(accountID, makeSlice(pqPub)) : makeMsg(accountID, Slice{});
+        Serializer const msg = hasPQPub ? makeMsg(accountID, pqPub) : makeMsg(accountID, Slice{});
 
         // Verify the signature.
         bool validSig = false;
@@ -584,7 +588,7 @@ multiSignHelper(
                 errorWhat.value_or("") + ".");
         }
 
-        if (hasPQPub && !pqVerify(makeSlice(pqPub), msg.slice(), makeSlice(pqSig)))
+        if (hasPQPub && !pqVerify(pqPub, msg.slice(), pqSig))
             return Unexpected(
                 std::string("Invalid post-quantum signature on account ") + toBase58(accountID) +
                 ".");

@@ -137,8 +137,10 @@ STValidation::isValid() const noexcept
         {
             try
             {
-                ok =
-                    pqVerify(*this, HashPrefix::Validation, makeSlice(getFieldVL(sfQuantumPubKey)));
+                // Zero-copy: the 1312-byte PQ pubkey is only read by pqVerify,
+                // so getFieldVL's heap copy is wasted on this per-validation
+                // consensus path.
+                ok = pqVerify(*this, HashPrefix::Validation, (*this)[sfQuantumPubKey]);
             }
             catch (...)
             {
