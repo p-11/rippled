@@ -2,9 +2,11 @@
 
 #include <xrpl/basics/Buffer.h>
 #include <xrpl/basics/Slice.h>
+#include <xrpl/basics/base_uint.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STObject.h>
+#include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/detail/mldsa.h>
 
 #include <cstddef>
@@ -26,6 +28,18 @@ inline constexpr std::size_t kPQSeedSize = mldsa::kSeedSize;
 */
 [[nodiscard]] std::pair<Buffer, Buffer>
 pqKeypair(Slice seed);
+
+/** Deterministic 32-byte ML-DSA seed derived from an XRPL Seed.
+
+    SHA-512/256 of the seed bytes, mirroring how Ed25519's
+    generateSecretKey expands the same input. Single source of truth for
+    this rule: wallet_propose and external custody tooling (the
+    pq-wallet-cli prototype) must derive the same PQ keypair from the same
+    master seed, or a recovered wallet would no longer match the PQ pubkey
+    registered on the ledger.
+*/
+[[nodiscard]] uint256
+pqSeedFromSeed(Seed const& seed);
 
 /** Produce a post-quantum signature over `msg` using `secretKey`.
 

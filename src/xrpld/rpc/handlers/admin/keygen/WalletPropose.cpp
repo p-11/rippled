@@ -14,7 +14,6 @@
 #include <xrpl/protocol/RPCErr.h>
 #include <xrpl/protocol/SecretKey.h>
 #include <xrpl/protocol/Seed.h>
-#include <xrpl/protocol/digest.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/protocol/tokens.h>
 
@@ -135,12 +134,11 @@ walletPropose(json::Value const& params)
 
     if (*keyType == KeyType::Dilithium)
     {
-        // Derive a 32-byte ML-DSA seed deterministically from the xrpl::Seed
-        // via SHA-512/256, mirroring how Ed25519's generateSecretKey expands
-        // the same input. The resulting hex seed is what clients pass back
-        // to sign / sign_for, so it appears in the response alongside the
-        // full public/secret keys.
-        auto const pqSeed = sha512Half(Slice(seed->data(), seed->size()));
+        // The derivation rule lives in pqSeedFromSeed (shared with the
+        // custody CLI tooling). The resulting hex seed is what clients pass
+        // back to sign / sign_for, so it appears in the response alongside
+        // the full public/secret keys.
+        auto const pqSeed = pqSeedFromSeed(*seed);
         auto const pqSeedSlice = Slice(pqSeed.data(), pqSeed.size());
         auto const [pqPub, pqSec] = pqKeypair(pqSeedSlice);
 

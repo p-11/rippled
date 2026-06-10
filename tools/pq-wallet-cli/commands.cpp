@@ -9,7 +9,6 @@
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SecretKey.h>
 #include <xrpl/protocol/Seed.h>
-#include <xrpl/protocol/digest.h>
 
 #include <defaults.h>
 #include <ecc_custody_mock.h>
@@ -109,11 +108,7 @@ keygen(int argc, char** argv)
     }
     else
     {
-        auto const pqSeedHash = xrpl::sha512Half(xrpl::Slice(eccSeed.data(), eccSeed.size()));
-        static_assert(
-            decltype(pqSeedHash)::kBytes >= xrpl::kPQSeedSize,
-            "sha512Half output narrower than kPQSeedSize; "
-            "revisit the PQ-seed derivation if kPQSeedSize ever grows past 32 bytes.");
+        auto const pqSeedHash = xrpl::pqSeedFromSeed(eccSeed);
         pqSeedBytes.assign(pqSeedHash.data(), pqSeedHash.data() + pqSeedHash.size());
     }
 
