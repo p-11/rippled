@@ -399,6 +399,35 @@ public:
     }
 
     void
+    testPqBindingCheck()
+    {
+        testcase("pqBindingCheck outcomes");
+
+        auto [pqPub, pqSec] = mldsa::keypair();
+        auto [otherPub, otherSec] = mldsa::keypair();
+        std::optional<Buffer> const manifestPq{Buffer{pqPub.data(), pqPub.size()}};
+        std::optional<Buffer> const noManifestPq;
+
+        // ECC-only validator: everything passes, even declared PQ material.
+        BEAST_EXPECT(pqBindingCheck(noManifestPq, std::nullopt, false, true) == PqBindingCheck::Ok);
+        BEAST_EXPECT(
+            pqBindingCheck(noManifestPq, Slice(otherPub), true, true) == PqBindingCheck::Ok);
+
+        // Hybrid validator, matching declared pubkey: ok.
+        BEAST_EXPECT(pqBindingCheck(manifestPq, Slice(pqPub), true, false) == PqBindingCheck::Ok);
+
+        // Hybrid validator, mismatched declared pubkey: forgery attempt,
+        // rejected regardless of fail-open/closed.
+        BEAST_EXPECT(
+            pqBindingCheck(manifestPq, Slice(otherPub), true, false) == PqBindingCheck::Mismatch);
+
+        // Hybrid validator, no PQ material: only fail-closed rejects.
+        BEAST_EXPECT(pqBindingCheck(manifestPq, std::nullopt, false, false) == PqBindingCheck::Ok);
+        BEAST_EXPECT(
+            pqBindingCheck(manifestPq, std::nullopt, false, true) == PqBindingCheck::MissingPqSig);
+    }
+
+    void
     testLoadStore(ManifestCache& m)
     {
         testcase("load/store");
@@ -1129,6 +1158,7 @@ public:
         testManifestVersioning();
         testHybridManifest();
         testPqContinuity();
+        testPqBindingCheck();
     }
 };
 

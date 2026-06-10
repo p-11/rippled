@@ -209,6 +209,28 @@ loadValidatorToken(
     std::vector<std::string> const& blob,
     beast::Journal journal = beast::Journal(beast::Journal::getNullSink()));
 
+/** Outcome of checking a received message's PQ material against the
+    validator manifest's declared PQ ephemeral pubkey. */
+enum class PqBindingCheck { Ok, Mismatch, MissingPqSig };
+
+/** Apply the manifest PQ-binding rule shared by the validation and proposal
+    ingress paths.
+
+    - ECC-only validators (no manifest PQ key) always pass.
+    - A declared PQ pubkey that differs from the manifest's is a forgery
+      attempt (e.g. a stolen ECC key paired with the attacker's own PQ
+      keypair): Mismatch, regardless of fail-open/closed.
+    - Under failClosed, a hybrid validator's message that carries no PQ
+      signature is dropped: MissingPqSig. Under fail-open it passes, which is
+      the deliberate mixed-network rollout window.
+*/
+[[nodiscard]] PqBindingCheck
+pqBindingCheck(
+    std::optional<Buffer> const& manifestPq,
+    std::optional<Slice> declaredPqPub,
+    bool hasPqSig,
+    bool failClosed) noexcept;
+
 enum class ManifestDisposition {
     /// Manifest is valid
     Accepted = 0,

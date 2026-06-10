@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -325,6 +326,27 @@ Manifest::getMasterSignature() const
     SerialIter sit(serialized.data(), serialized.size());
     st.set(sit);
     return st.getFieldVL(sfMasterSignature);
+}
+
+PqBindingCheck
+pqBindingCheck(
+    std::optional<Buffer> const& manifestPq,
+    std::optional<Slice> declaredPqPub,
+    bool hasPqSig,
+    bool failClosed) noexcept
+{
+    if (!manifestPq)
+        return PqBindingCheck::Ok;
+
+    if (declaredPqPub &&
+        (declaredPqPub->size() != manifestPq->size() ||
+         std::memcmp(declaredPqPub->data(), manifestPq->data(), manifestPq->size()) != 0))
+        return PqBindingCheck::Mismatch;
+
+    if (failClosed && !hasPqSig)
+        return PqBindingCheck::MissingPqSig;
+
+    return PqBindingCheck::Ok;
 }
 
 std::optional<ValidatorToken>
