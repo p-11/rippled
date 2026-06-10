@@ -68,6 +68,28 @@ peekVL(STObject const& obj, SField const& field)
     return Slice(blob.data(), blob.size());
 }
 
+// True if `obj` or any of its (possibly nested) signers carries a
+// post-quantum field. Mirrors every place a verifier reads PQ fields:
+// the transaction itself, its multi-signers (sfSigners), and its batch
+// signers (sfBatchSigners, which checkBatchSign verifies, including their
+// own nested sfSigners). Used by the preflight amendment gate so no PQ
+// material is verified before featureQuantum activates.
+[[nodiscard]] bool
+carriesQuantumField(STObject const& obj)
+{
+    if (obj.isFieldPresent(sfQuantumPubKey) || obj.isFieldPresent(sfQuantumSignature))
+        return true;
+    if (obj.isFieldPresent(sfSigners))
+        for (auto const& sub : obj.getFieldArray(sfSigners))
+            if (carriesQuantumField(sub))
+                return true;
+    if (obj.isFieldPresent(sfBatchSigners))
+        for (auto const& sub : obj.getFieldArray(sfBatchSigners))
+            if (carriesQuantumField(sub))
+                return true;
+    return false;
+}
+
 }  // namespace
 
 /** Performs early sanity checks on the txid */
@@ -221,19 +243,10 @@ Transactor::preflight1(PreflightContext const& ctx, std::uint32_t flagMask)
     // verifies PQ material unconditionally (signature validity cannot depend
     // on ledger state), so without this preflight rejection the new fields
     // would change transaction validity before featureQuantum activates.
-    if (!ctx.rules.enabled(featureQuantum))
-    {
-        bool hasPq =
-            ctx.tx.isFieldPresent(sfQuantumPubKey) || ctx.tx.isFieldPresent(sfQuantumSignature);
-        if (!hasPq && ctx.tx.isFieldPresent(sfSigners))
-        {
-            for (auto const& signer : ctx.tx.getFieldArray(sfSigners))
-                hasPq = hasPq || signer.isFieldPresent(sfQuantumPubKey) ||
-                    signer.isFieldPresent(sfQuantumSignature);
-        }
-        if (hasPq)
-            return temDISABLED;
-    }
+    // carriesQuantumField covers the tx, its multi-signers, and its batch
+    // signers — every place checkSign / checkBatchSign reads PQ fields.
+    if (!ctx.rules.enabled(featureQuantum) && carriesQuantumField(ctx.tx))
+        return temDISABLED;
 
     // An AccountTxnID field constrains transaction ordering more than the
     // Sequence field.  Tickets, on the other hand, reduce ordering

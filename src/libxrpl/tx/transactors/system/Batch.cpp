@@ -258,6 +258,18 @@ Batch::preflight(PreflightContext const& ctx)
             return temBAD_REGKEY;
         }
 
+        // Inner txns are authorised via the outer BatchSigners, so their own
+        // checkSign never runs and any PQ fields they carry would be
+        // committed to the batch hash but never verified. Reject them.
+        if (sig.isFieldPresent(sfQuantumPubKey) || sig.isFieldPresent(sfQuantumSignature))
+        {
+            JLOG(j.debug()) << "BatchTrace[" << parentBatchId << "]: "
+                            << "inner txn " << label
+                            << " cannot include post-quantum signature fields. "
+                            << "txID: " << hash;
+            return temBAD_SIGNATURE;
+        }
+
         return tesSUCCESS;
     };
     for (STObject rb : rawTxns)
