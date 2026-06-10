@@ -156,12 +156,55 @@ public:
     }
 
     void
+    testDanglingPqSignature(KeyType keyType)
+    {
+        testcase(label("PQ signature without PQ pubkey is rejected", keyType));
+        auto const k = makeHybridKeys(keyType);
+
+        // ECC-only validation (empty PQ slices), then bolt on a quantum
+        // signature with no pubkey. sfQuantumSignature is kNotSigning, so
+        // the ECC signature stays valid; the mismatched-fields guard must
+        // reject the validation anyway (tx-path parity).
+        auto val = std::make_shared<STValidation>(
+            NetClock::time_point{NetClock::duration{1000}},
+            k.ecPub,
+            k.ecSec,
+            k.nodeID,
+            [](STObject& obj) {
+                obj.setFieldU32(sfLedgerSequence, 1);
+                obj.setFieldH256(sfLedgerHash, uint256{42});
+            },
+            Slice{},
+            Slice{});
+        BEAST_EXPECT(val->isValid());
+
+        Buffer junk(kPQSignatureSize);
+        val->setFieldVL(sfQuantumSignature, Slice(junk));
+
+        // Reparse so isValid() recomputes (valid_ is cached at signing).
+        Serializer s;
+        val->add(s);
+        try
+        {
+            SerialIter sit(s.slice());
+            auto const reparsed = std::make_shared<STValidation>(
+                sit, [](PublicKey const& pk) { return calcNodeID(pk); }, true);
+            fail("Validation with dangling PQ signature should not verify");
+        }
+        catch (std::exception const&)
+        {
+            pass();
+        }
+    }
+
+    void
     runFor(KeyType keyType)
     {
         testRoundTrip(keyType);
         testWireRoundTrip(keyType);
         testTamperedPqSignature(keyType);
         testStrippingPqPubKeyBreaksEcc(keyType);
+        testDanglingPqSignature(keyType);
     }
 
     void

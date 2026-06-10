@@ -114,13 +114,26 @@ STValidation::isValid() const noexcept
             return false;
         }
 
+        // Tx-path parity ("Mismatched post-quantum signature fields"):
+        // sfQuantumSignature is excluded from the ECC signing hash
+        // (kNotSigning), so without this guard anyone could append junk PQ
+        // bytes to a captured validation, keep the ECC signature valid, and
+        // relay unlimited distinct-suppression variants of it.
+        bool const hasPQPub = isFieldPresent(sfQuantumPubKey);
+        bool const hasPQSig = isFieldPresent(sfQuantumSignature);
+        if (hasPQPub != hasPQSig)
+        {
+            valid_ = false;
+            return false;
+        }
+
         bool ok = verifyDigest(
             getSignerPublic(),
             getSigningHash(),
             makeSlice(getFieldVL(sfSignature)),
             (getFlags() & kVfFullyCanonicalSig) != 0u);
 
-        if (ok && isFieldPresent(sfQuantumPubKey))
+        if (ok && hasPQPub)
         {
             try
             {
