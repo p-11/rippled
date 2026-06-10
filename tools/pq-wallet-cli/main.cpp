@@ -18,7 +18,7 @@ Commands:
   keygen          Generate (or import) the ECC + PQ keypair and persist wallet state.
   opt-in          Register the wallet's PQ pubkey on its AccountRoot via AccountSet asfQuantum.
   sign-tx         Build, hybrid-sign, and emit a Payment transaction.
-  submit-tx       Submit a previously signed tx_blob to a hybrid-aware rippled.
+  submit-tx       Submit a previously signed tx_blob to a hybrid-aware xrpld.
   show-account    Display the wallet's on-ledger AccountRoot, including QuantumPubKey.
 
 Common options:
@@ -26,7 +26,7 @@ Common options:
                       Secret material lives in <path>.custody.json (ECC mock)
                       and <path>.pq.json (PQ custody mock); the wallet binary
                       never opens those files directly.
-  --rpc-url <url>     Hybrid-aware rippled JSON-RPC endpoint.
+  --rpc-url <url>     Hybrid-aware xrpld JSON-RPC endpoint.
                       Defaults to http://127.0.0.1:5050 (the standalone-mode
                       demo at scripts/demo/). For a multi-validator DevNet
                       pass --rpc-url http://127.0.0.1:5005.

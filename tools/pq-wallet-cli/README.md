@@ -2,7 +2,7 @@
 
 ## Build
 
-The tool is gated behind an opt-in CMake option so the default rippled
+The tool is gated behind an opt-in CMake option so the default xrpld
 build is untouched:
 
 ```sh
@@ -19,7 +19,7 @@ expects `.build/xrpld` to exist too.
 tools/pq-wallet-cli/run-demo.sh
 ```
 
-Launches rippled in standalone mode with the `Quantum` amendment
+Launches xrpld in standalone mode with the `Quantum` amendment
 pre-enabled at genesis, then walks the PoC project description flow:
 
 1. `keygen` - wallet mints fresh ECC + PQ key material.

@@ -13,7 +13,7 @@ add_executable(
 )
 
 # The clang-format hook rewrites local includes from "x.h" to <x.h> across the
-# rippled tree. Listing the tool's own directory on the include path keeps the
+# xrpld tree. Listing the tool's own directory on the include path keeps the
 # angle-bracket form resolvable for headers that sit next to main.cpp.
 target_include_directories(pq-wallet-cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
