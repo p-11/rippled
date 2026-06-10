@@ -217,6 +217,24 @@ Transactor::preflight1(PreflightContext const& ctx, std::uint32_t flagMask)
     if (auto const ret = detail::preflightCheckSigningKey(ctx.tx, ctx.j))
         return ret;
 
+    // Amendment gate for the hybrid-signature fields. STTx::checkSign
+    // verifies PQ material unconditionally (signature validity cannot depend
+    // on ledger state), so without this preflight rejection the new fields
+    // would change transaction validity before featureQuantum activates.
+    if (!ctx.rules.enabled(featureQuantum))
+    {
+        bool hasPq =
+            ctx.tx.isFieldPresent(sfQuantumPubKey) || ctx.tx.isFieldPresent(sfQuantumSignature);
+        if (!hasPq && ctx.tx.isFieldPresent(sfSigners))
+        {
+            for (auto const& signer : ctx.tx.getFieldArray(sfSigners))
+                hasPq = hasPq || signer.isFieldPresent(sfQuantumPubKey) ||
+                    signer.isFieldPresent(sfQuantumSignature);
+        }
+        if (hasPq)
+            return temDISABLED;
+    }
+
     // An AccountTxnID field constrains transaction ordering more than the
     // Sequence field.  Tickets, on the other hand, reduce ordering
     // constraints.  Because Tickets and AccountTxnID work against one

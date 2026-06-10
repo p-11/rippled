@@ -525,6 +525,12 @@ public:
         auto pq = PQKey::generate();
         env(clearQuantum(alice), Ter(temDISABLED));
         env(signers(alice, 1, {Signer{bob, 1, std::nullopt, pkBytes(pq)}}), Ter(temDISABLED));
+
+        // A transaction carrying PQ signature fields directly (a hybrid-signed
+        // noop) is rejected at preflight too, even though it sets no flag and
+        // no SignerEntry: checkSign verifies PQ material unconditionally, so
+        // the fields must not change validity before the amendment activates.
+        env(noop(alice), quantum_sign(alice, pq), Ter(temDISABLED));
         env.close();
     }
 
