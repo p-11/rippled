@@ -127,20 +127,26 @@ STValidation::isValid() const noexcept
             return false;
         }
 
+        // Serialize the signing payload once: the ECC digest is its
+        // SHA-512/256, and the PQ signature verifies over the same raw bytes.
+        // Signatures and the PQ pubkey are read zero-copy (operator[]) rather
+        // than getFieldVL, avoiding ~3.7 KiB of copies on this per-validation
+        // consensus path.
+        Serializer ss;
+        ss.add32(HashPrefix::Validation);
+        addWithoutSigningFields(ss);
+
         bool ok = verifyDigest(
             getSignerPublic(),
-            getSigningHash(),
-            makeSlice(getFieldVL(sfSignature)),
+            ss.getSHA512Half(),
+            (*this)[sfSignature],
             (getFlags() & kVfFullyCanonicalSig) != 0u);
 
         if (ok && hasPQPub)
         {
             try
             {
-                // Zero-copy: the 1312-byte PQ pubkey is only read by pqVerify,
-                // so getFieldVL's heap copy is wasted on this per-validation
-                // consensus path.
-                ok = pqVerify(*this, HashPrefix::Validation, (*this)[sfQuantumPubKey]);
+                ok = pqVerify((*this)[sfQuantumPubKey], ss.slice(), (*this)[sfQuantumSignature]);
             }
             catch (...)
             {

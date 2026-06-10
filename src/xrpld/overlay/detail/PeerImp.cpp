@@ -2420,12 +2420,14 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMValidation> const& m)
         // shared with the proposal path (see pqBindingCheck for the rule).
         auto const masterKey = app_.getValidatorManifests().getMasterKey(val->getSignerPublic());
         auto const manifestPq = app_.getValidatorManifests().getQuantumSigningKey(masterKey);
-        std::optional<Blob> const declaredPq = val->isFieldPresent(sfQuantumPubKey)
-            ? std::optional<Blob>{val->getFieldVL(sfQuantumPubKey)}
+        // Zero-copy: the declared PQ pubkey is only memcmp'd inside
+        // pqBindingCheck, which does not outlive `val`.
+        std::optional<Slice> const declaredPq = val->isFieldPresent(sfQuantumPubKey)
+            ? std::optional<Slice>{(*val)[sfQuantumPubKey]}
             : std::nullopt;
         switch (pqBindingCheck(
             manifestPq,
-            declaredPq ? std::optional<Slice>{makeSlice(*declaredPq)} : std::nullopt,
+            declaredPq,
             val->isFieldPresent(sfQuantumSignature),
             app_.config().pqValidationFailClosed))
         {
