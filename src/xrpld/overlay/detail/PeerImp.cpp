@@ -1796,6 +1796,30 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
             return;
     }
 
+    // Hybrid binding enforcement, mirroring the TMValidation handler: the PQ
+    // pubkey carried in a proposal is otherwise self-attesting (checkSign
+    // verifies against the carried key), so without this check the PQ layer
+    // adds no authentication on the proposal path.
+    auto const masterKey = app_.getValidatorManifests().getMasterKey(publicKey);
+    auto const manifestPq = app_.getValidatorManifests().getQuantumSigningKey(masterKey);
+    switch (pqBindingCheck(
+        manifestPq,
+        hasPqPub ? std::optional<Slice>{pqPub} : std::nullopt,
+        hasPqSig,
+        app_.config().pqValidationFailClosed))
+    {
+        case PqBindingCheck::Mismatch:
+            JLOG(pJournal_.warn()) << "Proposal: PQ pubkey does not match manifest";
+            fee_.update(Resource::kFeeInvalidSignature, "PQ pubkey mismatch");
+            return;
+        case PqBindingCheck::MissingPqSig:
+            JLOG(pJournal_.warn()) << "Proposal: missing PQ signature from hybrid validator";
+            fee_.update(Resource::kFeeUselessData, "missing PQ signature");
+            return;
+        case PqBindingCheck::Ok:
+            break;
+    }
+
     uint256 const proposeHash = uint256::fromRaw(set.currenttxhash());
     uint256 const prevLedger = uint256::fromRaw(set.previousledger());
 
@@ -1850,7 +1874,7 @@ PeerImp::onMessage(std::shared_ptr<protocol::TMProposeSet> const& m)
             proposeHash,
             closeTime,
             app_.getTimeKeeper().closeTime(),
-            calcNodeID(app_.getValidatorManifests().getMasterKey(publicKey))});
+            calcNodeID(masterKey)});
 
     std::weak_ptr<PeerImp> const weak = shared_from_this();
     app_.getJobQueue().addJob(
