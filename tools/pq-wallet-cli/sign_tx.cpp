@@ -1,20 +1,14 @@
-#include <xrpl/basics/Buffer.h>
-#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/strHex.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/json/json_writer.h>
-#include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/PublicKey.h>
-#include <xrpl/protocol/SField.h>
-#include <xrpl/protocol/STParsedJSON.h>
-#include <xrpl/protocol/STTx.h>
-#include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/jss.h>
 
 #include <arg_utils.h>
 #include <commands.h>
 #include <defaults.h>
 #include <ecc_custody_mock.h>
+#include <hybrid_sign.h>
 #include <pq_custody_mock.h>
 #include <rpc_client.h>
 #include <wallet_state.h>
@@ -120,49 +114,20 @@ signTx(int argc, char** argv)
     tx[xrpl::jss::Sequence] = sequence;
     tx[xrpl::jss::SigningPubKey] = eccPubHex;
 
-    xrpl::STParsedJSONObject parsed("tx_json", tx);
-    if (!parsed.object)
-        throw std::runtime_error(
-            "sign-tx: tx_json failed to parse: " + parsed.error.toStyledString());
-
-    xrpl::STTx stTx(std::move(*parsed.object));
-
-    auto const pqPub = pqMock.publicKey();
-    stTx.setFieldVL(xrpl::sfQuantumPubKey, pqPub);
-
-    // Build the canonical signing payload, identical to what STTx::sign
-    // produces internally: HashPrefix::TxSign || serialize(tx without
-    // sfTxnSignature / sfQuantumSignature). Both signatures must commit to
-    // the same bytes a verifier reconstructs, otherwise the hybrid pair is
-    // not cryptographically bound.
-    xrpl::Serializer payload;
-    payload.add32(static_cast<std::uint32_t>(xrpl::HashPrefix::TxSign));
-    stTx.addWithoutSigningFields(payload);
-    auto const payloadSlice = xrpl::makeSlice(payload.peekData());
-
-    auto const eccSig = custodyMock.signWithECC(payloadSlice);
-    auto const pqSig = pqMock.signWithPq(payloadSlice);
-
-    stTx.setFieldVL(xrpl::sfTxnSignature, eccSig);
-    stTx.setFieldVL(xrpl::sfQuantumSignature, pqSig);
-
-    xrpl::Serializer txSerial;
-    stTx.add(txSerial);
-    auto const txBlobHex = xrpl::strHex(txSerial.peekData());
-    auto const txHash = to_string(stTx.getHash(xrpl::HashPrefix::TransactionId));
+    auto const signedTx = sign::hybridSignFromJson("sign-tx", tx, custodyMock, pqMock);
 
     // The sidecar carries the five fields the PoC project description calls
     // for (PQ signature and pubkey, algorithm, payload, ECC signature) plus
     // tx_blob and tx_hash so submit-tx can consume the same file.
     json::Value sidecar(json::ValueType::Object);
     sidecar["algorithm"] = wallet.algorithm;
-    sidecar["pq_public_key_hex"] = xrpl::strHex(pqPub);
-    sidecar["pq_signature_hex"] = xrpl::strHex(pqSig);
-    sidecar["ecc_signature_hex"] = xrpl::strHex(eccSig);
+    sidecar["pq_public_key_hex"] = xrpl::strHex(pqMock.publicKey());
+    sidecar["pq_signature_hex"] = xrpl::strHex(signedTx.pqSignature);
+    sidecar["ecc_signature_hex"] = xrpl::strHex(signedTx.eccSignature);
     sidecar["ecc_public_key_hex"] = eccPubHex;
-    sidecar["serialized_payload_hex"] = xrpl::strHex(payload.peekData());
-    sidecar["tx_blob"] = txBlobHex;
-    sidecar["tx_hash"] = txHash;
+    sidecar["serialized_payload_hex"] = xrpl::strHex(signedTx.payload);
+    sidecar["tx_blob"] = signedTx.txBlobHex;
+    sidecar["tx_hash"] = signedTx.txHash;
 
     auto const outDir = args.outPath.parent_path();
     if (!outDir.empty())
@@ -182,11 +147,11 @@ signTx(int argc, char** argv)
     std::cout << "  amount_drops    : " << *args.amountDrops << '\n';
     std::cout << "  sequence        : " << sequence << '\n';
     std::cout << "  fee_drops       : " << args.feeDrops << '\n';
-    std::cout << "  tx_hash         : " << txHash << '\n';
+    std::cout << "  tx_hash         : " << signedTx.txHash << '\n';
     std::cout << "  sidecar         : " << args.outPath.string() << '\n';
-    std::cout << "  ecc_sig (bytes) : " << eccSig.size() << '\n';
-    std::cout << "  pq_sig  (bytes) : " << pqSig.size() << '\n';
-    std::cout << "\ntx_blob:\n" << txBlobHex << '\n';
+    std::cout << "  ecc_sig (bytes) : " << signedTx.eccSignature.size() << '\n';
+    std::cout << "  pq_sig  (bytes) : " << signedTx.pqSignature.size() << '\n';
+    std::cout << "\ntx_blob:\n" << signedTx.txBlobHex << '\n';
     return EXIT_SUCCESS;
 }
 

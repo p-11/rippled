@@ -2,6 +2,7 @@ add_executable(
     pq-wallet-cli
     main.cpp
     commands.cpp
+    hybrid_sign.cpp
     sign_tx.cpp
     submit_show.cpp
     opt_in.cpp

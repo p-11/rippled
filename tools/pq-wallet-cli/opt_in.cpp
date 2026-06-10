@@ -1,12 +1,5 @@
-#include <xrpl/basics/Buffer.h>
-#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/strHex.h>
 #include <xrpl/json/json_value.h>
-#include <xrpl/protocol/HashPrefix.h>
-#include <xrpl/protocol/SField.h>
-#include <xrpl/protocol/STParsedJSON.h>
-#include <xrpl/protocol/STTx.h>
-#include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/TxFlags.h>
 #include <xrpl/protocol/jss.h>
 
@@ -14,6 +7,7 @@
 #include <commands.h>
 #include <defaults.h>
 #include <ecc_custody_mock.h>
+#include <hybrid_sign.h>
 #include <pq_custody_mock.h>
 #include <rpc_client.h>
 #include <wallet_state.h>
@@ -99,32 +93,10 @@ optIn(int argc, char** argv)
     tx[xrpl::jss::Sequence] = sequence;
     tx[xrpl::jss::SigningPubKey] = eccPubHex;
 
-    xrpl::STParsedJSONObject parsed("tx_json", tx);
-    if (!parsed.object)
-        throw std::runtime_error(
-            "opt-in: tx_json failed to parse: " + parsed.error.toStyledString());
-
-    xrpl::STTx stTx(std::move(*parsed.object));
-
-    stTx.setFieldVL(xrpl::sfQuantumPubKey, pqPub);
-
-    xrpl::Serializer payload;
-    payload.add32(static_cast<std::uint32_t>(xrpl::HashPrefix::TxSign));
-    stTx.addWithoutSigningFields(payload);
-    auto const payloadSlice = xrpl::makeSlice(payload.peekData());
-
-    auto const eccSig = custodyMock.signWithECC(payloadSlice);
-    auto const pqSig = pqMock.signWithPq(payloadSlice);
-
-    stTx.setFieldVL(xrpl::sfTxnSignature, eccSig);
-    stTx.setFieldVL(xrpl::sfQuantumSignature, pqSig);
-
-    xrpl::Serializer txSerial;
-    stTx.add(txSerial);
-    auto const txBlobHex = xrpl::strHex(txSerial.peekData());
+    auto const signedTx = sign::hybridSignFromJson("opt-in", tx, custodyMock, pqMock);
 
     json::Value submitParams(json::ValueType::Object);
-    submitParams["tx_blob"] = txBlobHex;
+    submitParams["tx_blob"] = signedTx.txBlobHex;
     auto const result = rpc::call(args.rpcUrl, "submit", std::move(submitParams));
     auto const engineResult = result.get("engine_result", "").asString();
 
