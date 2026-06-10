@@ -155,7 +155,12 @@ STValidation::STValidation(SerialIter& sit, LookupNodeID&& lookupNodeID, bool ch
     , signingPubKey_([this]() {
         auto const spk = getFieldVL(sfSigningPubKey);
 
-        if (!publicKeyType(makeSlice(spk)))
+        // Hybrid validations keep a secp256k1 ECC signing key; the ML-DSA
+        // material travels in the separate sfQuantum* fields, so the
+        // envelope key-type check stays strict. This is the cheapest
+        // rejection point for junk-keyed validations (isValid() would catch
+        // them later, but only after manifest lookups and a job-queue trip).
+        if (publicKeyType(makeSlice(spk)) != KeyType::Secp256k1)
             Throw<std::runtime_error>("Invalid public key in validation");
 
         return PublicKey{makeSlice(spk)};

@@ -210,11 +210,10 @@ public:
     void
     run() override
     {
-        // signDigest is hardcoded to secp256k1, so the validator-side
-        // signing path cannot produce ed25519 ECC validation signatures
-        // even though RD-445 lifted the envelope-level keytype check.
-        // Ed25519 hybrid validations are a follow-up once signDigest /
-        // verifyDigest gain ed25519 support.
+        // Validations are secp256k1-signed end to end: signDigest /
+        // verifyDigest are hardcoded to secp256k1 and the deserializer
+        // enforces the same. Ed25519 hybrid validations would need both
+        // lifted together.
         runFor(KeyType::Secp256k1);
     }
 };

@@ -207,22 +207,19 @@ public:
             BEAST_EXPECT(strcmp(ex.what(), "Invalid public key in validation") == 0);
         }
 
-        // Ed25519 pubkey: accepted at deserialize time (signature is
-        // verified only when checkSignature=true; pre-RD-445 the keytype
-        // check threw before signature verification could run).
+        // Ed25519 signing key: validations keep a secp256k1 envelope key
+        // (the ML-DSA material rides in the separate sfQuantum* fields), so
+        // a non-secp256k1 signing pubkey is rejected at deserialize time.
         try
         {
             SerialIter sit{kPayload4};
             auto val = std::make_shared<xrpl::STValidation>(
                 sit, [](PublicKey const& pk) { return calcNodeID(pk); }, false);
-
-            BEAST_EXPECT(val);
-            BEAST_EXPECT(val->isFieldPresent(sfSigningPubKey));
-            BEAST_EXPECT(publicKeyType(val->getSignerPublic()) == KeyType::Ed25519);
+            fail("An exception should have been thrown");
         }
         catch (std::exception const& ex)
         {
-            fail(std::string("Unexpected exception thrown: ") + ex.what());
+            BEAST_EXPECT(strcmp(ex.what(), "Invalid public key in validation") == 0);
         }
 
         testcase("Deserialization: Missing Fields");
