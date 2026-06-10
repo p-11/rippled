@@ -2910,6 +2910,18 @@ public:
             BEAST_EXPECT(RPC::containsError(result));
         }
 
+        // signature_target + pq_seed_hex is unsupported (STTx::sign would
+        // logicError on it); it must come back as an RPC error, not a crash.
+        {
+            json::Value toSign;
+            toSign[jss::tx_json] = noop(env.master);
+            toSign[jss::secret] = "masterpassphrase";
+            toSign[jss::pq_seed_hex] = pqSeedHex;
+            toSign[jss::signature_target] = "CounterpartySignature";
+            auto const result = env.rpc("json", "sign", to_string(toSign))[jss::result];
+            BEAST_EXPECT(RPC::containsError(result));
+        }
+
         // ECC-only sign keeps producing ECC-only blobs (regression).
         {
             json::Value toSign;

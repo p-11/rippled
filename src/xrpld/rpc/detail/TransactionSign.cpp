@@ -543,6 +543,13 @@ transactionPreProcessImpl(
         signingArgs.setSignatureTarget(signatureTarget);
     }
 
+    // PQ signing into an inner signature target is not supported: STTx::sign
+    // treats the combination as a logic error and terminates. Reject it at
+    // the RPC boundary so callers get a parameter error instead.
+    if (signatureTarget && !pqPubBuf.empty())
+        return RPC::makeError(
+            RpcInvalidParams, "pq_seed_hex cannot be combined with signature_target");
+
     if (!params.isMember(jss::tx_json))
         return RPC::missingFieldError(jss::tx_json);
 
