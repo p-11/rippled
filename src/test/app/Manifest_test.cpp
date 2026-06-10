@@ -399,6 +399,32 @@ public:
     }
 
     void
+    testVerifyMissingSignature()
+    {
+        testcase("verify() rejects a manifest missing a signature field");
+
+        auto const sk = randomSecretKey();
+        auto const kp = randomKeyPair(KeyType::Secp256k1);
+        auto const masterPub = derivePublicKey(KeyType::Ed25519, sk);
+
+        // Non-revoked manifest serialized WITHOUT sfSignature. Built via the
+        // raw constructor so it bypasses deserializeManifest's presence
+        // checks. verify() must reject it (return false), not throw out of
+        // the reader when it reads the absent signature field.
+        STObject st(sfGeneric);
+        st[sfSequence] = 1;
+        st[sfPublicKey] = masterPub;
+        st[sfSigningPubKey] = kp.first;
+        sign(st, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        Serializer s;
+        st.add(s);
+        std::string serialized(static_cast<char const*>(s.data()), s.size());
+
+        Manifest const m(std::move(serialized), masterPub, kp.first, 1, "");
+        BEAST_EXPECT(!m.verify());
+    }
+
+    void
     testPqBindingCheck()
     {
         testcase("pqBindingCheck outcomes");
@@ -1158,6 +1184,7 @@ public:
         testManifestVersioning();
         testHybridManifest();
         testPqContinuity();
+        testVerifyMissingSignature();
         testPqBindingCheck();
     }
 };

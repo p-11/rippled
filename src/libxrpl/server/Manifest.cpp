@@ -251,21 +251,29 @@ Manifest::verify() const
 
     // Serialize the signing payload once and verify all (up to four)
     // signatures against the same bytes, instead of re-serializing the
-    // manifest inside each xrpl::verify / pqVerify call. Signatures are read
-    // zero-copy via operator[] rather than getFieldVL, which matters for the
-    // 2420-byte PQ signatures on this per-manifest verify path (peer
-    // handshake, manifest relay, UNL refresh).
+    // manifest inside each xrpl::verify / pqVerify call.
     Serializer ss;
     ss.add32(HashPrefix::Manifest);
     st.addWithoutSigningFields(ss);
-    Slice const payload{ss.data(), ss.size()};
+    Slice const payload = ss.slice();
 
-    // Signing key and signature are not required for
-    // master key revocations
-    if (!revoked() && !xrpl::verify(*signingKey, payload, st[sfSignature]))
-        return false;
+    // Signatures are read zero-copy via the optional accessor (st[~field])
+    // rather than getFieldVL, which matters for the 2420-byte PQ signatures
+    // on this per-manifest verify path (peer handshake, manifest relay, UNL
+    // refresh). The optional form also lets verify() fail safe: a manifest
+    // missing a required signature field is rejected rather than throwing
+    // out of verify() (deserializeManifest guarantees presence today, but a
+    // directly-constructed manifest must not crash the caller).
 
-    if (!xrpl::verify(masterKey, payload, st[sfMasterSignature]))
+    // Signing key and signature are not required for master key revocations.
+    if (!revoked())
+    {
+        auto const sig = st[~sfSignature];
+        if (!sig || !xrpl::verify(*signingKey, payload, *sig))
+            return false;
+    }
+
+    if (auto const sig = st[~sfMasterSignature]; !sig || !xrpl::verify(masterKey, payload, *sig))
         return false;
 
     // Hybrid manifests: both PQ signatures must verify against the
@@ -274,16 +282,16 @@ Manifest::verify() const
     // quantumMasterKey is enough to imply the entire pair is set on `st`.
     if (quantumMasterKey)
     {
-        if (!xrpl::pqVerify(
-                Slice(quantumMasterKey->data(), quantumMasterKey->size()),
-                payload,
-                st[sfQuantumMasterSignature]))
+        auto const mSig = st[~sfQuantumMasterSignature];
+        if (!mSig ||
+            !xrpl::pqVerify(
+                Slice(quantumMasterKey->data(), quantumMasterKey->size()), payload, *mSig))
             return false;
 
-        if (!xrpl::pqVerify(
-                Slice(quantumSigningKey->data(), quantumSigningKey->size()),
-                payload,
-                st[sfQuantumSignature]))
+        auto const eSig = st[~sfQuantumSignature];
+        if (!eSig ||
+            !xrpl::pqVerify(
+                Slice(quantumSigningKey->data(), quantumSigningKey->size()), payload, *eSig))
             return false;
     }
 
