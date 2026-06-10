@@ -3,12 +3,16 @@
 #include <xrpld/rpc/detail/RPCHelpers.h>
 #include <xrpld/rpc/handlers/admin/keygen/WalletPropose.h>
 
+#include <xrpl/basics/Slice.h>
+#include <xrpl/basics/strHex.h>
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/json/json_writer.h>
 #include <xrpl/protocol/AccountID.h>
 #include <xrpl/protocol/ErrorCodes.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
+#include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/protocol/tokens.h>
 
@@ -837,6 +841,29 @@ public:
     }
 
     void
+    testPqSeedDerivationMatchesHelper()
+    {
+        testcase("wallet_propose pq_seed_hex matches pqSeedFromSeed");
+
+        // The custody CLI derives its ML-DSA seed via pqSeedFromSeed; pin
+        // the RPC output to the same helper so the two paths cannot drift
+        // and mint different PQ keypairs from the same master seed.
+        json::Value params;
+        params[jss::key_type] = "dilithium";
+        params[jss::passphrase] = "masterpassphrase";
+        auto const result = walletPropose(params);
+        BEAST_EXPECT(!containsError(result));
+
+        auto const seed = parseGenericSeed("masterpassphrase");
+        if (BEAST_EXPECT(seed))
+        {
+            auto const pqSeed = pqSeedFromSeed(*seed);
+            BEAST_EXPECT(
+                result[jss::pq_seed_hex].asString() == strHex(Slice(pqSeed.data(), pqSeed.size())));
+        }
+    }
+
+    void
     run() override
     {
         testKeyType(std::nullopt, kSecP256K1Strings);
@@ -852,6 +879,7 @@ public:
 
         testXrplLibEd25519();
         testDilithiumWallet();
+        testPqSeedDerivationMatchesHelper();
 
         testKeypairForSignatureErrors();
     }

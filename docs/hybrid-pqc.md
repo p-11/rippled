@@ -4,7 +4,7 @@ Implementation notes for the modified code paths.
 
 ## Overview
 
-Adds hybrid signing to every place rippled signs something, so that
+Adds hybrid signing to every place xrpld signs something, so that
 breaking ECC alone, or breaking ML-DSA-44 alone, does not break the
 network. Every signed payload (transaction, manifest, validation,
 consensus proposal) can carry both an ECC signature and a Dilithium
@@ -165,7 +165,7 @@ Unit-test sweep:
 ./.build/xrpld --unittest
 ```
 
-End-to-end local demo (rippled standalone, Quantum pre-enabled at
+End-to-end local demo (xrpld standalone, Quantum pre-enabled at
 genesis, walks `wallet_propose` -> fund -> opt-in -> hybrid Payment
 -> ECC-only rejection in a few seconds):
 

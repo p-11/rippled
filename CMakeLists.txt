@@ -137,6 +137,7 @@ include(XrplProtocolAutogen)
 include(XrplInstall)
 include(XrplPackaging)
 include(XrplValidatorKeys)
+include(XrplPqWalletCli)
 
 if(tests)
     include(CTest)

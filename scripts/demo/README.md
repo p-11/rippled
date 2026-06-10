@@ -1,6 +1,6 @@
 # Local hybrid PQ signing and verification demo
 
-A single command runs rippled in standalone mode with the Quantum
+A single command runs xrpld in standalone mode with the Quantum
 amendment pre-enabled at genesis and walks the user-visible hybrid
 signing path end-to-end. No Docker, no multi-validator setup.
 

@@ -5,8 +5,10 @@
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STObject.h>
+#include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/detail/mldsa.h>
+#include <xrpl/protocol/digest.h>
 
 namespace xrpl {
 
@@ -22,6 +24,16 @@ std::pair<Buffer, Buffer>
 pqKeypair(Slice seed)
 {
     return mldsa::keypair(seed);
+}
+
+uint256
+pqSeedFromSeed(Seed const& seed)
+{
+    static_assert(
+        uint256::kBytes >= kPQSeedSize,
+        "sha512Half output narrower than kPQSeedSize; revisit the PQ-seed "
+        "derivation if kPQSeedSize ever grows past 32 bytes.");
+    return sha512Half(Slice(seed.data(), seed.size()));
 }
 
 bool
