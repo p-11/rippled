@@ -507,6 +507,21 @@ ManifestCache::applyManifest(Manifest m)
             return ManifestDisposition::Stale;
         }
 
+        // PQ continuity: once a master key has published a hybrid manifest,
+        // every later non-revocation manifest must carry the same PQ master
+        // key. Manifest::verify only checks the PQ signatures the new manifest
+        // itself declares, so without this rule an attacker who recovered the
+        // ECC master secret could publish a higher-sequence ECC-only (or
+        // re-keyed) manifest and silently strip the validator's PQ layer.
+        // Revocations are exempt: they neuter the key entirely.
+        if (iter != map_.end() && !m.revoked() && iter->second.quantumMasterKey &&
+            (!m.quantumMasterKey || !(*m.quantumMasterKey == *iter->second.quantumMasterKey)))
+        {
+            if (auto stream = j_.warn())
+                logMftAct(stream, "PQDowngrade", m.masterKey, m.sequence, iter->second.sequence);
+            return ManifestDisposition::Invalid;
+        }
+
         if (checkSignature && !m.verify())
         {
             if (auto stream = j_.warn())

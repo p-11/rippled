@@ -333,6 +333,72 @@ public:
     }
 
     void
+    testPqContinuity()
+    {
+        testcase("hybrid manifest cannot be downgraded to ECC-only");
+
+        auto const sk = randomSecretKey();
+        auto const kp0 = randomKeyPair(KeyType::Secp256k1);
+        auto [pqMPub, pqMSec] = mldsa::keypair();
+        auto [pqEPub, pqESec] = mldsa::keypair();
+
+        ManifestCache cache;
+        auto const hybrid = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp0.second,
+            KeyType::Secp256k1,
+            Slice(pqMPub),
+            Slice(pqMSec),
+            Slice(pqEPub),
+            Slice(pqESec),
+            0);
+        BEAST_EXPECT(cache.applyManifest(clone(hybrid)) == ManifestDisposition::Accepted);
+
+        // Higher-sequence ECC-only manifest: an attacker with only the
+        // recovered ECC master secret can mint this; it must be refused.
+        auto const kp1 = randomKeyPair(KeyType::Secp256k1);
+        auto const eccOnly = makeManifest(sk, KeyType::Ed25519, kp1.second, KeyType::Secp256k1, 1);
+        BEAST_EXPECT(cache.applyManifest(clone(eccOnly)) == ManifestDisposition::Invalid);
+
+        // Higher-sequence hybrid manifest with a different PQ master is the
+        // same downgrade in disguise.
+        auto [pqM2Pub, pqM2Sec] = mldsa::keypair();
+        auto [pqE2Pub, pqE2Sec] = mldsa::keypair();
+        auto const swappedMaster = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp1.second,
+            KeyType::Secp256k1,
+            Slice(pqM2Pub),
+            Slice(pqM2Sec),
+            Slice(pqE2Pub),
+            Slice(pqE2Sec),
+            1);
+        BEAST_EXPECT(cache.applyManifest(clone(swappedMaster)) == ManifestDisposition::Invalid);
+
+        // Rotating only the ephemerals under the same PQ master is the
+        // legitimate path and must keep working.
+        auto const rotated = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp1.second,
+            KeyType::Secp256k1,
+            Slice(pqMPub),
+            Slice(pqMSec),
+            Slice(pqE2Pub),
+            Slice(pqE2Sec),
+            1);
+        BEAST_EXPECT(cache.applyManifest(clone(rotated)) == ManifestDisposition::Accepted);
+
+        // Revocation (seq = max, no PQ fields) must still be honoured: it
+        // neuters the validator rather than re-keying it.
+        BEAST_EXPECT(
+            cache.applyManifest(makeRevocation(sk, KeyType::Ed25519)) ==
+            ManifestDisposition::Accepted);
+    }
+
+    void
     testLoadStore(ManifestCache& m)
     {
         testcase("load/store");
@@ -1062,6 +1128,7 @@ public:
         testManifestDomainNames();
         testManifestVersioning();
         testHybridManifest();
+        testPqContinuity();
     }
 };
 
