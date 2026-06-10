@@ -4,9 +4,11 @@
 #include <xrpld/core/ConfigSections.h>
 
 #include <xrpl/basics/Log.h>
+#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/base64.h>
 #include <xrpl/beast/utility/Journal.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SecretKey.h>
 #include <xrpl/protocol/Seed.h>
@@ -15,6 +17,11 @@
 #include <utility>
 
 namespace xrpl {
+
+// Fixed message signed and verified at startup to prove the validator
+// token's PQ secret corresponds to the manifest's PQ ephemeral pubkey.
+static constexpr char kPqProbe[] = "validator-keys-pq-self-test";
+
 ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
 {
     if (config.exists(SECTION_VALIDATOR_TOKEN) && config.exists(SECTION_VALIDATION_SEED))
@@ -40,6 +47,25 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             {
                 configInvalid_ = true;
                 JLOG(j.fatal()) << "Invalid token specified in [" SECTION_VALIDATOR_TOKEN "]";
+            }
+            else if (
+                manifestHybrid &&
+                !pqVerify(
+                    Slice{m->quantumSigningKey->data(), m->quantumSigningKey->size()},
+                    Slice{kPqProbe, sizeof(kPqProbe) - 1},
+                    pqSign(
+                        Slice{token->pqValidationSecret->data(), token->pqValidationSecret->size()},
+                        Slice{kPqProbe, sizeof(kPqProbe) - 1})))
+            {
+                // The token's PQ secret must produce signatures the manifest's
+                // declared PQ ephemeral verifies. There is no sk->pk derivation
+                // helper for ML-DSA, so prove correspondence with a
+                // sign/verify round-trip. Without this, a mismatched secret
+                // starts up cleanly and every validation we emit is silently
+                // dropped by all peers.
+                configInvalid_ = true;
+                JLOG(j.fatal()) << "PQ validation secret does not match the manifest "
+                                   "PQ ephemeral key in [" SECTION_VALIDATOR_TOKEN "]";
             }
             else
             {

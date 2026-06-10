@@ -6,14 +6,23 @@
 #include <xrpld/core/Config.h>
 #include <xrpld/core/ConfigSections.h>
 
+#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/base64.h>
+#include <xrpl/basics/strHex.h>
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/beast/utility/Journal.h>
+#include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
+#include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/STObject.h>
 #include <xrpl/protocol/SecretKey.h>
 #include <xrpl/protocol/Seed.h>
+#include <xrpl/protocol/Serializer.h>
+#include <xrpl/protocol/Sign.h>
 #include <xrpl/protocol/UintTypes.h>
+#include <xrpl/protocol/detail/mldsa.h>
 #include <xrpl/protocol/tokens.h>
 #include <xrpl/server/Manifest.h>
 
@@ -61,6 +70,45 @@ class ValidatorKeys_test : public beast::unit_test::Suite
     };
 
 public:
+    // Build a hybrid manifest + validator token. `pqTokenSecret` is the PQ
+    // secret embedded in the token; pass the matching ephemeral secret for a
+    // valid token or an unrelated one for a mismatch.
+    static std::vector<std::string>
+    makeHybridToken(
+        SecretKey const& masterSecret,
+        SecretKey const& ephSecret,
+        Slice pqMasterPub,
+        Slice pqMasterSec,
+        Slice pqEphPub,
+        Slice pqEphSec,
+        Slice pqTokenSecret)
+    {
+        auto const masterPublic = derivePublicKey(KeyType::Ed25519, masterSecret);
+        auto const ephPublic = derivePublicKey(KeyType::Secp256k1, ephSecret);
+
+        STObject st(sfGeneric);
+        st[sfSequence] = 1;
+        st[sfPublicKey] = masterPublic;
+        st[sfSigningPubKey] = ephPublic;
+        st.setFieldVL(sfQuantumPubKey, pqEphPub);
+        st.setFieldVL(sfQuantumMasterPublicKey, pqMasterPub);
+        sign(st, HashPrefix::Manifest, KeyType::Secp256k1, ephSecret);
+        sign(st, HashPrefix::Manifest, KeyType::Ed25519, masterSecret, sfMasterSignature);
+        pqSign(st, HashPrefix::Manifest, pqEphSec, sfQuantumSignature);
+        pqSign(st, HashPrefix::Manifest, pqMasterSec, sfQuantumMasterSignature);
+
+        Serializer s;
+        st.add(s);
+        std::string const manifestB64 =
+            base64Encode(std::string(static_cast<char const*>(s.data()), s.size()));
+
+        std::string const json = "{\"validation_secret_key\":\"" +
+            strHex(Slice{ephSecret.data(), ephSecret.size()}) +
+            "\",\"pq_validation_secret_key\":\"" + strHex(pqTokenSecret) + "\",\"manifest\":\"" +
+            manifestB64 + "\"}";
+        return {base64Encode(json)};
+    }
+
     void
     run() override
     {
@@ -170,6 +218,53 @@ public:
             BEAST_EXPECT(k.configInvalid());
             BEAST_EXPECT(!k.keys);
             BEAST_EXPECT(k.manifest.empty());
+        }
+
+        {
+            // Hybrid token whose PQ secret matches the manifest -> valid.
+            auto const masterSecret = randomSecretKey();
+            auto const [ephPub, ephSec] = randomKeyPair(KeyType::Secp256k1);
+            auto [pqMPub, pqMSec] = mldsa::keypair();
+            auto [pqEPub, pqESec] = mldsa::keypair();
+
+            Config c;
+            c.section(SECTION_VALIDATOR_TOKEN)
+                .append(makeHybridToken(
+                    masterSecret,
+                    ephSec,
+                    Slice(pqMPub),
+                    Slice(pqMSec),
+                    Slice(pqEPub),
+                    Slice(pqESec),
+                    Slice(pqESec)));
+            ValidatorKeys const k{c, journal};
+            BEAST_EXPECT(!k.configInvalid());
+            if (BEAST_EXPECT(k.keys); k.keys.has_value())
+                BEAST_EXPECT(k.keys->pqSecretKey.has_value());
+        }
+
+        {
+            // Hybrid token whose PQ secret does NOT correspond to the
+            // manifest's PQ ephemeral -> rejected at startup, not discovered
+            // by the network silently dropping our validations.
+            auto const masterSecret = randomSecretKey();
+            auto const [ephPub, ephSec] = randomKeyPair(KeyType::Secp256k1);
+            auto [pqMPub, pqMSec] = mldsa::keypair();
+            auto [pqEPub, pqESec] = mldsa::keypair();
+            auto [pqWrongPub, pqWrongSec] = mldsa::keypair();
+
+            Config c;
+            c.section(SECTION_VALIDATOR_TOKEN)
+                .append(makeHybridToken(
+                    masterSecret,
+                    ephSec,
+                    Slice(pqMPub),
+                    Slice(pqMSec),
+                    Slice(pqEPub),
+                    Slice(pqESec),
+                    Slice(pqWrongSec)));
+            ValidatorKeys const k{c, journal};
+            BEAST_EXPECT(k.configInvalid());
         }
     }
 };  // namespace test
