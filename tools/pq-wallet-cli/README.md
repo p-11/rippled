@@ -52,7 +52,7 @@ pq-wallet-cli pay           [--wallet <path>] [--rpc-url <url>]
 pq-wallet-cli status        [--rpc-url <url>]
 pq-wallet-cli opt-in        [--wallet <path>] [--rpc-url <url>] [--sequence <n>] [--fee <n>]
 pq-wallet-cli sign-tx       [--wallet <path>] [--rpc-url <url>] [--out <path>]
-                            --to <address> --amount-drops <n>
+                            (--to <address> | --to-wallet <path>) --amount-drops <n>
                             [--sequence <n>] [--fee <n>]
 pq-wallet-cli submit-tx     [--rpc-url <url>] (--blob <hex> | --in <path>)
 pq-wallet-cli show-account  [--wallet <path>] [--rpc-url <url>]
