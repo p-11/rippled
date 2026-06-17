@@ -34,7 +34,7 @@ struct SignTxArgs
     std::optional<std::string> amountDrops;
     std::optional<std::uint32_t> sequence;
     std::uint32_t feeDrops{defaults::kFeeDrops};
-    std::string rpcUrl{defaults::kRpcUrl};
+    std::string rpcUrl{defaults::rpcUrl()};
 };
 
 SignTxArgs

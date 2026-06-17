@@ -3,6 +3,9 @@ add_executable(
     main.cpp
     commands.cpp
     hybrid_sign.cpp
+    fund.cpp
+    pay.cpp
+    status.cpp
     sign_tx.cpp
     submit_show.cpp
     opt_in.cpp
