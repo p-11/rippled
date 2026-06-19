@@ -1,5 +1,6 @@
 #include <xrpl/server/Manifest.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/Slice.h>
@@ -240,6 +241,8 @@ logMftAct(
 bool
 Manifest::verify() const
 {
+    BenchProbe probe{"manifest.verify"};
+
     STObject st(sfGeneric);
     SerialIter sit(serialized.data(), serialized.size());
     st.set(sit);

@@ -1,5 +1,6 @@
 #include <xrpl/protocol/STTx.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Expected.h>
 #include <xrpl/basics/Log.h>
@@ -77,6 +78,7 @@ STTx::STTx(STObject&& object) : STObject(std::move(object))
 
 STTx::STTx(SerialIter& sit) : STObject(sfTransaction)
 {
+    BenchProbe probe{"tx.deserialize"};
     int const length = sit.getBytesLeft();
 
     if ((length < kTxMinSizeBytes) || (length > kTxMaxSizeBytes))
@@ -424,6 +426,8 @@ STTx::getMetaSQL(
 static Expected<void, std::string>
 singleSignHelper(STObject const& sigObject, Slice const& data)
 {
+    BenchProbe probe{"checkSign.single"};
+
     // We don't allow both a non-empty sfSigningPubKey and an sfSigners.
     // That would allow the transaction to be signed two ways.  So if both
     // fields are present the signature is invalid.
@@ -516,6 +520,8 @@ multiSignHelper(
 
     for (auto const& signer : signers)
     {
+        BenchProbe probe{"checkSign.multi.per_signer"};
+
         auto const accountID = signer.getAccountID(sfAccount);
 
         // The account owner may not usually multisign for themselves.

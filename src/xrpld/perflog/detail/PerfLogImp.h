@@ -111,12 +111,26 @@ class PerfLogImp : public PerfLog
     bool stop_{false};
     bool rotate_{false};
 
+    // Verification probe events are buffered in memory and flushed to logFile_
+    // by the background thread each interval, so the hot signature-verify path
+    // pays only a mutex lock and a push_back rather than per-event file I/O.
+    struct EventRecord
+    {
+        std::string tag;
+        microseconds dur;
+        system_time_point time;
+    };
+    std::mutex eventMutex_;
+    std::vector<EventRecord> events_;
+
     void
     openLog();
     void
     run();
     void
     report();
+    void
+    flushEvents();
     void
     rpcEnd(std::string const& method, std::uint64_t const requestId, bool finish);
 
@@ -151,6 +165,9 @@ public:
         override;
     void
     jobFinish(JobType const type, microseconds dur, int instance) override;
+
+    void
+    event(std::string const& tag, microseconds dur) override;
 
     json::Value
     countersJson() const override

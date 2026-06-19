@@ -4,6 +4,7 @@
 #include <xrpld/app/ledger/OpenLedger.h>
 #include <xrpld/app/main/Application.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/chrono.h>
 #include <xrpl/beast/utility/Journal.h>
@@ -65,6 +66,7 @@ buildLedgerImpl(
         // Write the final version of all modified SHAMap
         // nodes to the node store to preserve the new LCL
 
+        BenchProbe probe{"ledger.persist"};
         int const asf = built->stateMap().flushDirty(NodeObjectType::AccountNode);
         int const tmf = built->txMap().flushDirty(NodeObjectType::TransactionNode);
         JLOG(j.debug()) << "Flushed " << asf << " accounts and " << tmf << " transaction nodes";
@@ -99,6 +101,7 @@ applyTransactions(
     OpenView& view,
     beast::Journal j)
 {
+    BenchProbe probe{"ledger.apply_set"};
     bool certainRetry = true;
     std::size_t count = 0;
 
