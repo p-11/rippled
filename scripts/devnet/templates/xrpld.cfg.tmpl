@@ -1,0 +1,58 @@
+[server]
+port_rpc_admin_local
+port_ws_admin_local
+port_peer
+
+[port_rpc_admin_local]
+port = 5005
+ip = 0.0.0.0
+admin = 0.0.0.0
+protocol = http
+
+[port_ws_admin_local]
+port = 6006
+ip = 0.0.0.0
+admin = 0.0.0.0
+protocol = ws
+
+[port_peer]
+port = 51235
+ip = 0.0.0.0
+protocol = peer
+
+[node_size]
+small
+
+[node_db]
+type=NuDB
+path=/var/lib/rippled/db/nudb
+
+[database_path]
+/var/lib/rippled/db
+
+[debug_logfile]
+/var/lib/rippled/debug.log
+
+[ips_fixed]
+__IPS_FIXED__
+
+[validators_file]
+validators.txt
+
+[network_id]
+99
+
+[perf]
+perf_log = /var/lib/rippled/perf/perf.log
+log_interval = 1
+
+__AMENDMENTS_SECTION__
+__PQ_VALIDATIONS_SECTION__
+[validator_token]
+__VALIDATOR_TOKEN__
+
+[transaction_queue]
+minimum_txn_in_ledger = 10000
+minimum_txn_in_ledger_standalone = 10000
+target_txn_in_ledger = 10000
+maximum_txn_in_ledger = 20000
