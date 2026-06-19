@@ -1,14 +1,17 @@
 #include <xrpl/basics/strHex.h>
 #include <xrpl/json/json_value.h>
-#include <xrpl/protocol/TxFlags.h>
+#include <xrpl/protocol/AccountID.h>
+#include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PublicKey.h>
+#include <xrpl/protocol/SecretKey.h>
+#include <xrpl/protocol/Seed.h>
+#include <xrpl/protocol/Sign.h>
 #include <xrpl/protocol/jss.h>
 
 #include <arg_utils.h>
 #include <commands.h>
 #include <defaults.h>
-#include <ecc_custody_mock.h>
 #include <hybrid_sign.h>
-#include <pq_custody_mock.h>
 #include <rpc_client.h>
 #include <wallet_state.h>
 
@@ -24,24 +27,29 @@ namespace pqwallet::cmd {
 
 namespace {
 
-struct OptInArgs
+struct FundArgs
 {
     std::filesystem::path walletPath{defaults::kWalletPath};
+    std::string amountDrops{defaults::kFundDrops};
     std::string rpcUrl{defaults::rpcUrl()};
     std::optional<std::uint32_t> sequence;
     std::uint32_t feeDrops{defaults::kFeeDrops};
 };
 
-OptInArgs
-parseOptInArgs(int argc, char** argv)
+FundArgs
+parseFundArgs(int argc, char** argv)
 {
-    OptInArgs out;
+    FundArgs out;
     for (int i = 0; i < argc; ++i)
     {
         std::string_view const a = argv[i];
         if (a == "--wallet" && i + 1 < argc && argv[i + 1][0] != '-')
         {
             out.walletPath = argv[++i];
+        }
+        else if (a == "--amount-drops" && i + 1 < argc && argv[i + 1][0] != '-')
+        {
+            out.amountDrops = argv[++i];
         }
         else if (a == "--rpc-url" && i + 1 < argc && argv[i + 1][0] != '-')
         {
@@ -58,7 +66,7 @@ parseOptInArgs(int argc, char** argv)
         else
         {
             throw std::runtime_error(
-                "opt-in: unknown or incomplete argument '" + std::string(a) + "'");
+                "fund: unknown or incomplete argument '" + std::string(a) + "'");
         }
     }
     return out;
@@ -67,43 +75,43 @@ parseOptInArgs(int argc, char** argv)
 }  // namespace
 
 int
-optIn(int argc, char** argv)
+fund(int argc, char** argv)
 {
-    auto const args = parseOptInArgs(argc, argv);
+    auto const args = parseFundArgs(argc, argv);
     auto const wallet = state::load(args.walletPath);
+
+    // The genesis account holds all XRP on a fresh network. We sign its
+    // Payment locally with the well-known test key so the airdrop needs no
+    // node-side `sign` RPC and no external tooling.
+    auto const [genesisPub, genesisSec] = xrpl::generateKeyPair(
+        xrpl::KeyType::Secp256k1, xrpl::generateSeed(defaults::kGenesisSecret));
+    auto const genesisAccount = xrpl::toBase58(xrpl::calcAccountID(genesisPub));
+
     auto const sequence =
-        args.sequence ? *args.sequence : rpc::fetchSequence(args.rpcUrl, wallet.accountId);
+        args.sequence ? *args.sequence : rpc::fetchSequence(args.rpcUrl, genesisAccount);
 
-    custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
-    custodyMock.load();
-    custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
-    pqMock.load();
-
-    auto const eccPubHex = xrpl::strHex(custodyMock.publicKey());
-    auto const pqPub = pqMock.publicKey();
-    auto const pqPubHex = xrpl::strHex(pqPub);
-
-    // AccountSet asfQuantum registers the PQ pubkey on the AccountRoot;
-    // every later tx from this account must carry a matching PQ signature.
     json::Value tx(json::ValueType::Object);
-    tx[xrpl::jss::TransactionType] = "AccountSet";
-    tx[xrpl::jss::Account] = wallet.accountId;
-    tx[xrpl::jss::SetFlag] = xrpl::asfQuantum;
+    tx[xrpl::jss::TransactionType] = "Payment";
+    tx[xrpl::jss::Account] = genesisAccount;
+    tx[xrpl::jss::Destination] = wallet.accountId;
+    tx[xrpl::jss::Amount] = args.amountDrops;
     tx[xrpl::jss::Fee] = std::to_string(args.feeDrops);
     tx[xrpl::jss::Sequence] = sequence;
-    tx[xrpl::jss::SigningPubKey] = eccPubHex;
+    tx[xrpl::jss::SigningPubKey] = xrpl::strHex(genesisPub);
 
-    auto const signedTx = sign::hybridSignFromJson("opt-in", tx, custodyMock, pqMock);
+    auto const signed_ = sign::eccSignFromJson("fund", tx, [&](xrpl::Slice payload) {
+        return xrpl::sign(genesisPub, genesisSec, payload);
+    });
 
     json::Value submitParams(json::ValueType::Object);
-    submitParams["tx_blob"] = signedTx.txBlobHex;
+    submitParams["tx_blob"] = signed_.txBlobHex;
     auto const result = rpc::call(args.rpcUrl, "submit", std::move(submitParams));
     auto const engineResult = result.get("engine_result", "").asString();
 
-    std::cout << "opt-in (AccountSet asfQuantum) submitted.\n";
-    std::cout << "  account_id    : " << wallet.accountId << '\n';
-    std::cout << "  pq_pub_key    : " << pqPubHex.substr(0, 32) << "...\n";
-    std::cout << "  sequence      : " << sequence << '\n';
+    std::cout << "fund (genesis airdrop) submitted.\n";
+    std::cout << "  to_account    : " << wallet.accountId << '\n';
+    std::cout << "  amount_drops  : " << args.amountDrops << '\n';
+    std::cout << "  tx_hash       : " << signed_.txHash << '\n';
     std::cout << "  engine_result : " << engineResult << '\n';
     return engineResult == "tesSUCCESS" ? EXIT_SUCCESS : EXIT_FAILURE;
 }

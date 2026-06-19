@@ -31,10 +31,11 @@ struct SignTxArgs
     std::filesystem::path walletPath{defaults::kWalletPath};
     std::filesystem::path outPath{defaults::kSignedTxOutPath};
     std::optional<std::string> toAddress;
+    std::optional<std::filesystem::path> toWallet;
     std::optional<std::string> amountDrops;
     std::optional<std::uint32_t> sequence;
     std::uint32_t feeDrops{defaults::kFeeDrops};
-    std::string rpcUrl{defaults::kRpcUrl};
+    std::string rpcUrl{defaults::rpcUrl()};
 };
 
 SignTxArgs
@@ -55,6 +56,10 @@ parseSignTxArgs(int argc, char** argv)
         else if (a == "--to" && i + 1 < argc && argv[i + 1][0] != '-')
         {
             out.toAddress = argv[++i];
+        }
+        else if (a == "--to-wallet" && i + 1 < argc && argv[i + 1][0] != '-')
+        {
+            out.toWallet = argv[++i];
         }
         else if (a == "--amount-drops" && i + 1 < argc && argv[i + 1][0] != '-')
         {
@@ -78,8 +83,11 @@ parseSignTxArgs(int argc, char** argv)
                 "sign-tx: unknown or incomplete argument '" + std::string(a) + "'");
         }
     }
-    if (!out.toAddress)
-        throw std::runtime_error("sign-tx: --to <address> is required");
+    if (out.toAddress && out.toWallet)
+        throw std::runtime_error("sign-tx: --to and --to-wallet are mutually exclusive");
+    if (!out.toAddress && !out.toWallet)
+        throw std::runtime_error(
+            "sign-tx: one of --to <address> or --to-wallet <path> is required");
     if (!out.amountDrops)
         throw std::runtime_error("sign-tx: --amount-drops <n> is required");
     return out;
@@ -92,6 +100,12 @@ signTx(int argc, char** argv)
 {
     auto const args = parseSignTxArgs(argc, argv);
     auto const wallet = state::load(args.walletPath);
+
+    // --to-wallet resolves the destination from another wallet's state file,
+    // matching `pay`, so the demo never copies an account id by hand.
+    auto const destination =
+        args.toAddress ? *args.toAddress : state::load(*args.toWallet).accountId;
+
     auto const sequence =
         args.sequence ? *args.sequence : rpc::fetchSequence(args.rpcUrl, wallet.accountId);
 
@@ -108,7 +122,7 @@ signTx(int argc, char** argv)
     json::Value tx(json::ValueType::Object);
     tx[xrpl::jss::TransactionType] = "Payment";
     tx[xrpl::jss::Account] = wallet.accountId;
-    tx[xrpl::jss::Destination] = *args.toAddress;
+    tx[xrpl::jss::Destination] = destination;
     tx[xrpl::jss::Amount] = *args.amountDrops;
     tx[xrpl::jss::Fee] = std::to_string(args.feeDrops);
     tx[xrpl::jss::Sequence] = sequence;
@@ -143,7 +157,7 @@ signTx(int argc, char** argv)
 
     std::cout << "Hybrid Payment signed.\n";
     std::cout << "  account_id      : " << wallet.accountId << '\n';
-    std::cout << "  destination     : " << *args.toAddress << '\n';
+    std::cout << "  destination     : " << destination << '\n';
     std::cout << "  amount_drops    : " << *args.amountDrops << '\n';
     std::cout << "  sequence        : " << sequence << '\n';
     std::cout << "  fee_drops       : " << args.feeDrops << '\n';

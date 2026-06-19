@@ -9,6 +9,15 @@ int
 keygen(int argc, char** argv);
 
 int
+fund(int argc, char** argv);
+
+int
+pay(int argc, char** argv);
+
+int
+status(int argc, char** argv);
+
+int
 signTx(int argc, char** argv);
 
 int

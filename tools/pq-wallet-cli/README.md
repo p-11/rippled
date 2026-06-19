@@ -43,17 +43,71 @@ Exit code `0` on full success.
 
 ```text
 pq-wallet-cli keygen        [--wallet <path>] [--import-pq-seed <hex>]
+pq-wallet-cli fund          [--wallet <path>] [--rpc-url <url>]
+                            [--amount-drops <n>] [--sequence <n>] [--fee <n>]
+pq-wallet-cli pay           [--wallet <path>] [--rpc-url <url>]
+                            (--to <address> | --to-wallet <path>)
+                            --amount-drops <n> [--ecc-only]
+                            [--sequence <n>] [--fee <n>]
+pq-wallet-cli status        [--rpc-url <url>]
 pq-wallet-cli opt-in        [--wallet <path>] [--rpc-url <url>] [--sequence <n>] [--fee <n>]
 pq-wallet-cli sign-tx       [--wallet <path>] [--rpc-url <url>] [--out <path>]
-                            --to <address> --amount-drops <n>
+                            (--to <address> | --to-wallet <path>) --amount-drops <n>
                             [--sequence <n>] [--fee <n>]
 pq-wallet-cli submit-tx     [--rpc-url <url>] (--blob <hex> | --in <path>)
 pq-wallet-cli show-account  [--wallet <path>] [--rpc-url <url>]
 ```
 
 `--wallet` defaults to `./pq-wallet.json`. `--rpc-url` defaults to
-`http://127.0.0.1:5050` (the standalone-mode demo); pass
-`http://127.0.0.1:5005` for the multi-validator DevNet.
+`$PQ_WALLET_RPC_URL` if set, else `http://127.0.0.1:5050` (the standalone-mode
+demo); pass `http://127.0.0.1:5005` for the multi-validator DevNet (stock-1).
+
+- `fund` airdrops XRP from the genesis account to the wallet. It signs the
+  genesis Payment in-process with the well-known test key, so the demo needs
+  no node-side `sign` RPC and no external tooling.
+- `pay` hybrid-signs and submits a Payment in one step. `--to-wallet` resolves
+  the destination from another wallet's state file, so the two-party demo never
+  copies an account id by hand. `--ecc-only` is the bad-weather negative test:
+  it signs the classical signature only, which an opted-in account rejects with
+  `tefBAD_AUTH` (`Transactor`: account requires a quantum signature).
+- `status` summarizes a node's `server_info` (state, validated ledger, peers).
+
+`sign-tx` + `submit-tx` remain the custody-sidecar path: `sign-tx` emits the
+five-field artifact the project description calls for, and `submit-tx` consumes
+it. `pay` is the demo-ergonomic shortcut over the same signing pipeline.
+
+## Two-party demo (alice and bob)
+
+All `pq-wallet-cli`, no `curl` or `python`. Against a DevNet, point the wallet
+at a stock node once and drop the per-command flags:
+
+```sh
+export PQ_WALLET_RPC_URL=http://127.0.0.1:5005   # DevNet stock-1
+
+pq-wallet-cli keygen --wallet alice.json
+pq-wallet-cli keygen --wallet bob.json
+pq-wallet-cli fund   --wallet alice.json
+pq-wallet-cli fund   --wallet bob.json
+pq-wallet-cli status                              # node synced, ledgers advancing
+
+# normal hybrid transfers back and forth
+pq-wallet-cli pay --wallet alice.json --to-wallet bob.json   --amount-drops 5000000
+pq-wallet-cli pay --wallet bob.json   --to-wallet alice.json --amount-drops 2000000
+
+# both accounts register their PQ key on-ledger
+pq-wallet-cli opt-in --wallet alice.json
+pq-wallet-cli opt-in --wallet bob.json
+
+# the punchline: classical-only is now rejected, hybrid still works
+pq-wallet-cli pay --wallet alice.json --to-wallet bob.json --amount-drops 5000000 --ecc-only  # tefBAD_AUTH
+pq-wallet-cli pay --wallet alice.json --to-wallet bob.json --amount-drops 5000000             # tesSUCCESS
+
+pq-wallet-cli show-account --wallet alice.json    # QuantumPubKey present, balance moved
+```
+
+On a single-node standalone xrpld (no consensus) the ledger only advances on
+demand, so interleave a `ledger_accept` RPC between submissions; a DevNet
+closes ledgers on its own and needs none.
 
 `keygen` generates a fresh `xrpl::Seed` for the ECC half and derives
 the PQ seed via SHA-512/256 of that seed (mirroring `wallet_propose

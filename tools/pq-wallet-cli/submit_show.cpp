@@ -26,7 +26,7 @@ struct SubmitArgs
 {
     std::optional<std::string> blob;
     std::optional<std::filesystem::path> inPath;
-    std::string rpcUrl{defaults::kRpcUrl};
+    std::string rpcUrl{defaults::rpcUrl()};
     bool verbose{false};
 };
 
@@ -89,7 +89,7 @@ readTxBlobFromSidecar(std::filesystem::path const& p)
 struct ShowArgs
 {
     std::filesystem::path walletPath{defaults::kWalletPath};
-    std::string rpcUrl{defaults::kRpcUrl};
+    std::string rpcUrl{defaults::rpcUrl()};
 };
 
 ShowArgs

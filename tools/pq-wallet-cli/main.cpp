@@ -16,8 +16,12 @@ Usage:
 
 Commands:
   keygen          Generate (or import) the ECC + PQ keypair and persist wallet state.
+  fund            Airdrop XRP from genesis to the wallet account (no node sign RPC).
+  pay             Hybrid-sign and submit a Payment in one step (--ecc-only for the
+                  bad-weather test that an opted-in account rejects with tefBAD_AUTH).
+  status          Summarize a node's server_info (state, ledgers, peers).
   opt-in          Register the wallet's PQ pubkey on its AccountRoot via AccountSet asfQuantum.
-  sign-tx         Build, hybrid-sign, and emit a Payment transaction.
+  sign-tx         Build, hybrid-sign, and emit a Payment transaction (custody sidecar).
   submit-tx       Submit a previously signed tx_blob to a hybrid-aware xrpld.
   show-account    Display the wallet's on-ledger AccountRoot, including QuantumPubKey.
 
@@ -26,10 +30,10 @@ Common options:
                       Secret material lives in <path>.custody.json (ECC mock)
                       and <path>.pq.json (PQ custody mock); the wallet binary
                       never opens those files directly.
-  --rpc-url <url>     Hybrid-aware xrpld JSON-RPC endpoint.
-                      Defaults to http://127.0.0.1:5050 (the standalone-mode
-                      demo at scripts/demo/). For a multi-validator DevNet
-                      pass --rpc-url http://127.0.0.1:5005.
+  --rpc-url <url>     Hybrid-aware xrpld JSON-RPC endpoint. Defaults to
+                      $PQ_WALLET_RPC_URL if set, else http://127.0.0.1:5050
+                      (the standalone-mode demo). For a multi-validator DevNet
+                      pass --rpc-url http://127.0.0.1:5005 (stock-1).
   -h, --help          Show this help.
 
 The wallet treats the ECC half as a blackbox standing in for the Ripple
@@ -61,6 +65,12 @@ main(int argc, char** argv)
     {
         if (command == "keygen")
             return pqwallet::cmd::keygen(argc - 2, argv + 2);
+        if (command == "fund")
+            return pqwallet::cmd::fund(argc - 2, argv + 2);
+        if (command == "pay")
+            return pqwallet::cmd::pay(argc - 2, argv + 2);
+        if (command == "status")
+            return pqwallet::cmd::status(argc - 2, argv + 2);
         if (command == "sign-tx")
             return pqwallet::cmd::signTx(argc - 2, argv + 2);
         if (command == "submit-tx")
