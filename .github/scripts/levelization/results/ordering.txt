@@ -1,3 +1,5 @@
+bench.toplevel > xrpl.basics
+bench.toplevel > xrpl.protocol
 libxrpl.basics > xrpl.basics
 libxrpl.conditions > xrpl.basics
 libxrpl.conditions > xrpl.conditions

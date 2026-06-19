@@ -15,6 +15,7 @@ class Xrpl(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     options = {
         "assertions": [True, False],
+        "bench": [True, False],
         "coverage": [True, False],
         "fPIC": [True, False],
         "jemalloc": [True, False],
@@ -47,6 +48,7 @@ class Xrpl(ConanFile):
 
     default_options = {
         "assertions": False,
+        "bench": False,
         "coverage": False,
         "fPIC": True,
         "jemalloc": False,
@@ -135,6 +137,8 @@ class Xrpl(ConanFile):
         self.requires("lz4/1.10.0", force=True)
         self.requires("protobuf/6.33.5", force=True)
         self.requires("sqlite3/3.53.0", force=True)
+        if self.options.bench:
+            self.requires("benchmark/1.9.1")
         if self.options.jemalloc:
             self.requires("jemalloc/5.3.1")
         if self.options.rocksdb:
