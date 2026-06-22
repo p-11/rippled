@@ -138,6 +138,7 @@ include(XrplInstall)
 include(XrplPackaging)
 include(XrplValidatorKeys)
 include(XrplPqWalletCli)
+include(XrplBench)
 
 if(tests)
     include(CTest)

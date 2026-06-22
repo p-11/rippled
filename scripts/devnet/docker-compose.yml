@@ -1,0 +1,146 @@
+# Hybrid-PQ benchmark DevNet: 5 validators + 3 stock nodes.
+#
+# Run `scripts/devnet/setup.sh` once to generate per-node configs, then
+# `docker compose -f scripts/devnet/docker-compose.yml up --build` from
+# the repository root.
+#
+# Each node is pinned to a disjoint host-core subset (cpuset) so JobQueue
+# thread-pool contention is bounded and uniform across configurations. The
+# default mapping assumes a host with at least 16 logical cores; cores 13-15 are
+# left for the load driver, resource monitor, and OS. Each cpuset reads a
+# DEVNET_CPUSET_* env var (the value below is the default). `setup.sh` writes a
+# `.env` here that Compose auto-loads: on a host with fewer than 16 logical CPUs
+# it points every node at the full core range, disabling exclusive pinning rather
+# than failing. So both `run-suite.sh` and a manual `setup.sh && docker compose up`
+# adapt to the host; only a bare `docker compose up` with no prior `setup.sh` on a
+# small host would hit a cpuset-out-of-range error.
+#
+# XRPLD_BIN selects the binary baked into the image (default the hybrid build at
+# .build/xrpld); the stock ECC baseline profile overrides it.
+#
+# Each node bind-mounts a host perf directory so the aggregator can read the
+# PerfLog files (JobQueue events + verification probes) after a run.
+
+services:
+  validator-1:
+    build:
+      context: ../..
+      dockerfile: scripts/devnet/Dockerfile
+      args:
+        XRPLD_BIN: ${XRPLD_BIN:-.build/xrpld}
+    image: rippled-pq:dev
+    container_name: rippled-validator-1
+    cpuset: "${DEVNET_CPUSET_VALIDATOR_1:-0,1}"
+    volumes:
+      - ./configs/validator-1:/etc/rippled:ro
+      - ./perf/validator-1:/var/lib/rippled/perf
+      - validator-1-data:/var/lib/rippled
+    networks: [devnet]
+
+  validator-2:
+    image: rippled-pq:dev
+    container_name: rippled-validator-2
+    cpuset: "${DEVNET_CPUSET_VALIDATOR_2:-2,3}"
+    volumes:
+      - ./configs/validator-2:/etc/rippled:ro
+      - ./perf/validator-2:/var/lib/rippled/perf
+      - validator-2-data:/var/lib/rippled
+    networks: [devnet]
+    depends_on: [validator-1]
+
+  validator-3:
+    image: rippled-pq:dev
+    container_name: rippled-validator-3
+    cpuset: "${DEVNET_CPUSET_VALIDATOR_3:-4,5}"
+    volumes:
+      - ./configs/validator-3:/etc/rippled:ro
+      - ./perf/validator-3:/var/lib/rippled/perf
+      - validator-3-data:/var/lib/rippled
+    networks: [devnet]
+    depends_on: [validator-1]
+
+  validator-4:
+    image: rippled-pq:dev
+    container_name: rippled-validator-4
+    cpuset: "${DEVNET_CPUSET_VALIDATOR_4:-6,7}"
+    volumes:
+      - ./configs/validator-4:/etc/rippled:ro
+      - ./perf/validator-4:/var/lib/rippled/perf
+      - validator-4-data:/var/lib/rippled
+    networks: [devnet]
+    depends_on: [validator-1]
+
+  validator-5:
+    image: rippled-pq:dev
+    container_name: rippled-validator-5
+    cpuset: "${DEVNET_CPUSET_VALIDATOR_5:-8,9}"
+    volumes:
+      - ./configs/validator-5:/etc/rippled:ro
+      - ./perf/validator-5:/var/lib/rippled/perf
+      - validator-5-data:/var/lib/rippled
+    networks: [devnet]
+    depends_on: [validator-1]
+
+  # Stock (non-validating) nodes are the client-facing submit/query surface.
+  # stock-1 is the primary RPC endpoint; stock-2 and stock-3 let the load driver
+  # spread submissions across more than one node.
+  stock-1:
+    image: rippled-pq:dev
+    container_name: rippled-stock-1
+    cpuset: "${DEVNET_CPUSET_STOCK_1:-10}"
+    volumes:
+      - ./configs/stock-1:/etc/rippled:ro
+      - ./perf/stock-1:/var/lib/rippled/perf
+      - stock-1-data:/var/lib/rippled
+    networks: [devnet]
+    ports:
+      - "5005:5005" # admin RPC
+      - "6006:6006" # admin WS
+    depends_on:
+      - validator-1
+      - validator-2
+      - validator-3
+      - validator-4
+      - validator-5
+
+  stock-2:
+    image: rippled-pq:dev
+    container_name: rippled-stock-2
+    cpuset: "${DEVNET_CPUSET_STOCK_2:-11}"
+    volumes:
+      - ./configs/stock-2:/etc/rippled:ro
+      - ./perf/stock-2:/var/lib/rippled/perf
+      - stock-2-data:/var/lib/rippled
+    networks: [devnet]
+    ports:
+      - "5006:5005"
+      - "6007:6006"
+    depends_on: [validator-1]
+
+  stock-3:
+    image: rippled-pq:dev
+    container_name: rippled-stock-3
+    cpuset: "${DEVNET_CPUSET_STOCK_3:-12}"
+    volumes:
+      - ./configs/stock-3:/etc/rippled:ro
+      - ./perf/stock-3:/var/lib/rippled/perf
+      - stock-3-data:/var/lib/rippled
+    networks: [devnet]
+    ports:
+      - "5007:5005"
+      - "6008:6006"
+    depends_on: [validator-1]
+
+networks:
+  devnet:
+    driver: bridge
+
+volumes:
+  validator-1-data:
+  validator-2-data:
+  validator-3-data:
+  validator-4-data:
+  validator-5-data:
+  stock-1-data:
+  stock-2-data:
+  stock-3-data:

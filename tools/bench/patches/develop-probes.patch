@@ -1,0 +1,488 @@
+diff --git a/include/xrpl/basics/BenchProbe.h b/include/xrpl/basics/BenchProbe.h
+new file mode 100644
+index 000000000..66bb94a26
+--- /dev/null
++++ b/include/xrpl/basics/BenchProbe.h
+@@ -0,0 +1,55 @@
++#pragma once
++
++#include <atomic>
++#include <chrono>
++#include <string_view>
++
++namespace xrpl {
++
++// A process-global timing sink used by the benchmark probes. libxrpl cannot
++// depend on xrpld (where PerfLog lives), and the verification call sites are
++// free/static/member functions with no Application handle, so the probe reaches
++// its consumer through a single settable function pointer instead. xrpld
++// installs a PerfLog-backed sink at startup; when no sink is installed (unit
++// tests, the CLI, any libxrpl consumer) the probe is a no-op.
++using ProbeSink = void (*)(std::string_view tag, std::chrono::microseconds dur);
++
++void
++setProbeSink(ProbeSink sink) noexcept;
++
++ProbeSink
++getProbeSink() noexcept;
++
++// RAII probe: samples a steady clock at construction and reports the elapsed
++// time to the installed sink on destruction. The sink is captured once at
++// construction, so it stays consistent for the probe's lifetime and the clock
++// is not even read when no sink is installed.
++class BenchProbe
++{
++    ProbeSink sink_;
++    std::string_view tag_;
++    std::chrono::steady_clock::time_point t0_;
++
++public:
++    explicit BenchProbe(std::string_view tag) noexcept
++        : sink_(getProbeSink())
++        , tag_(tag)
++        , t0_(sink_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{})
++    {
++    }
++
++    ~BenchProbe()
++    {
++        if (sink_)
++            sink_(
++                tag_,
++                std::chrono::duration_cast<std::chrono::microseconds>(
++                    std::chrono::steady_clock::now() - t0_));
++    }
++
++    BenchProbe(BenchProbe const&) = delete;
++    BenchProbe&
++    operator=(BenchProbe const&) = delete;
++};
++
++}  // namespace xrpl
+diff --git a/include/xrpl/core/PerfLog.h b/include/xrpl/core/PerfLog.h
+index 38318c745..87d916d8f 100644
+--- a/include/xrpl/core/PerfLog.h
++++ b/include/xrpl/core/PerfLog.h
+@@ -116,6 +116,23 @@ public:
+     virtual void
+     jobFinish(JobType const type, microseconds dur, int instance) = 0;
+
++    /**
++     * Log a generic timed event (tag + duration).
++     *
++     * Used by the in-process verification probes (BenchProbe). The default
++     * implementation discards the event so subclasses and test doubles need
++     * not implement it.
++     *
++     * @param tag Event identifier
++     * @param dur Measured duration in microseconds
++     */
++    virtual void
++    event(std::string const& tag, microseconds dur)
++    {
++        (void)tag;
++        (void)dur;
++    }
++
+     /**
+      * Render performance counters in Json
+      *
+diff --git a/src/libxrpl/basics/BenchProbe.cpp b/src/libxrpl/basics/BenchProbe.cpp
+new file mode 100644
+index 000000000..2ac45fc60
+--- /dev/null
++++ b/src/libxrpl/basics/BenchProbe.cpp
+@@ -0,0 +1,23 @@
++#include <xrpl/basics/BenchProbe.h>
++
++#include <atomic>
++
++namespace xrpl {
++
++namespace {
++std::atomic<ProbeSink> g_probeSink{nullptr};
++}  // namespace
++
++void
++setProbeSink(ProbeSink sink) noexcept
++{
++    g_probeSink.store(sink, std::memory_order_relaxed);
++}
++
++ProbeSink
++getProbeSink() noexcept
++{
++    return g_probeSink.load(std::memory_order_relaxed);
++}
++
++}  // namespace xrpl
+diff --git a/src/libxrpl/ledger/Ledger.cpp b/src/libxrpl/ledger/Ledger.cpp
+index fe7db9a15..9b26472ae 100644
+--- a/src/libxrpl/ledger/Ledger.cpp
++++ b/src/libxrpl/ledger/Ledger.cpp
+@@ -1,5 +1,6 @@
+ #include <xrpl/ledger/Ledger.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Log.h>
+ #include <xrpl/basics/Slice.h>
+ #include <xrpl/basics/UnorderedContainers.h>
+@@ -531,6 +532,7 @@ Ledger::rawTxInsert(
+ {
+     XRPL_ASSERT(metaData, "xrpl::Ledger::rawTxInsert : non-null metadata input");
+
++    BenchProbe probe{"ledger.tx_insert"};
+     // low-level - just add to table
+     Serializer s(txn->getDataLength() + metaData->getDataLength() + 16);
+     s.addVL(txn->peekData());
+diff --git a/src/libxrpl/protocol/STTx.cpp b/src/libxrpl/protocol/STTx.cpp
+index 2777981fd..74987a3c5 100644
+--- a/src/libxrpl/protocol/STTx.cpp
++++ b/src/libxrpl/protocol/STTx.cpp
+@@ -1,5 +1,6 @@
+ #include <xrpl/protocol/STTx.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Blob.h>
+ #include <xrpl/basics/Expected.h>
+ #include <xrpl/basics/Log.h>
+@@ -76,6 +77,7 @@ STTx::STTx(STObject&& object) : STObject(std::move(object))
+
+ STTx::STTx(SerialIter& sit) : STObject(sfTransaction)
+ {
++    BenchProbe probe{"tx.deserialize"};
+     int const length = sit.getBytesLeft();
+
+     if ((length < kTxMinSizeBytes) || (length > kTxMaxSizeBytes))
+@@ -392,6 +394,8 @@ STTx::getMetaSQL(
+ static Expected<void, std::string>
+ singleSignHelper(STObject const& sigObject, Slice const& data)
+ {
++    BenchProbe probe{"checkSign.single"};
++
+     // We don't allow both a non-empty sfSigningPubKey and an sfSigners.
+     // That would allow the transaction to be signed two ways.  So if both
+     // fields are present the signature is invalid.
+@@ -462,6 +466,8 @@ multiSignHelper(
+
+     for (auto const& signer : signers)
+     {
++        BenchProbe probe{"checkSign.multi.per_signer"};
++
+         auto const accountID = signer.getAccountID(sfAccount);
+
+         // The account owner may not usually multisign for themselves.
+diff --git a/src/libxrpl/protocol/STValidation.cpp b/src/libxrpl/protocol/STValidation.cpp
+index 5eafb407e..2535ef9de 100644
+--- a/src/libxrpl/protocol/STValidation.cpp
++++ b/src/libxrpl/protocol/STValidation.cpp
+@@ -1,5 +1,6 @@
+ #include <xrpl/protocol/STValidation.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Blob.h>
+ #include <xrpl/basics/Slice.h>
+ #include <xrpl/basics/base_uint.h>
+@@ -104,6 +105,8 @@ STValidation::isValid() const noexcept
+             publicKeyType(getSignerPublic()) == KeyType::Secp256k1,
+             "xrpl::STValidation::isValid : valid key type");
+
++        BenchProbe probe{"validation.verify"};
++
+         valid_ = verifyDigest(
+             getSignerPublic(),
+             getSigningHash(),
+diff --git a/src/libxrpl/server/Manifest.cpp b/src/libxrpl/server/Manifest.cpp
+index b26c67e53..1fd6270a8 100644
+--- a/src/libxrpl/server/Manifest.cpp
++++ b/src/libxrpl/server/Manifest.cpp
+@@ -1,5 +1,6 @@
+ #include <xrpl/server/Manifest.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Blob.h>
+ #include <xrpl/basics/Log.h>
+ #include <xrpl/basics/Slice.h>
+@@ -193,6 +194,8 @@ logMftAct(
+ bool
+ Manifest::verify() const
+ {
++    BenchProbe probe{"manifest.verify"};
++
+     STObject st(sfGeneric);
+     SerialIter sit(serialized.data(), serialized.size());
+     st.set(sit);
+diff --git a/src/test/basics/PerfLog_test.cpp b/src/test/basics/PerfLog_test.cpp
+index c370c241c..f28a73ca5 100644
+--- a/src/test/basics/PerfLog_test.cpp
++++ b/src/test/basics/PerfLog_test.cpp
+@@ -4,6 +4,7 @@
+
+ #include <xrpld/rpc/detail/Handler.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/random.h>
+ #include <xrpl/beast/unit_test/suite.h>
+ #include <xrpl/beast/utility/Journal.h>
+@@ -1012,10 +1013,61 @@ public:
+         }
+     }
+
++    // A running PerfLog installs the global probe sink, so a BenchProbe scope
++    // routes its measured duration through PerfLog::event into the log file.
++    // Verify the wiring end to end: the buffered event is flushed on stop and
++    // its tag plus duration appear in the file.
++    void
++    testEvent()
++    {
++        testcase("Event probe");
++        using namespace boost::filesystem;
++
++        Fixture fixture{env_.app(), j_};
++        remove_all(fixture.logDir());
++
++        {
++            auto perfLog{fixture.perfLog(WithFile::Yes)};
++            perfLog->start();
++
++            {
++                BenchProbe probe{"unittest.probe"};
++            }
++
++            // Direct call path too: an event with an empty perf path is a
++            // no-op, but here the file is set so it must be recorded.
++            perfLog->event("unittest.direct", std::chrono::microseconds{1234});
++
++            perfLog->stop();
++        }
++
++        // The sink is detached once the PerfLog stops; a later probe must not
++        // crash or be attributed anywhere.
++        {
++            BenchProbe probe{"unittest.after_stop"};
++        }
++
++        bool sawProbe = false;
++        bool sawDirect = false;
++        std::ifstream logStream(fixture.logFile().c_str());
++        for (std::string line; std::getline(logStream, line);)
++        {
++            if (line.find("unittest.probe") != std::string::npos)
++                sawProbe = true;
++            if (line.find("unittest.direct") != std::string::npos &&
++                line.find("\"duration_us\":1234") != std::string::npos)
++                sawDirect = true;
++        }
++        BEAST_EXPECT(sawProbe);
++        BEAST_EXPECT(sawDirect);
++        BEAST_EXPECT(getProbeSink() == nullptr);
++    }
++
+     void
+     run() override
+     {
+         testFileCreation();
++        testEvent();
+         testRPC(WithFile::No);
+         testRPC(WithFile::Yes);
+         testJobs(WithFile::No);
+diff --git a/src/xrpld/app/ledger/detail/BuildLedger.cpp b/src/xrpld/app/ledger/detail/BuildLedger.cpp
+index a77c1c9c5..8479c0c41 100644
+--- a/src/xrpld/app/ledger/detail/BuildLedger.cpp
++++ b/src/xrpld/app/ledger/detail/BuildLedger.cpp
+@@ -4,6 +4,7 @@
+ #include <xrpld/app/ledger/OpenLedger.h>
+ #include <xrpld/app/main/Application.h>
+
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Log.h>
+ #include <xrpl/basics/chrono.h>
+ #include <xrpl/beast/utility/Journal.h>
+@@ -65,6 +66,7 @@ buildLedgerImpl(
+         // Write the final version of all modified SHAMap
+         // nodes to the node store to preserve the new LCL
+
++        BenchProbe probe{"ledger.persist"};
+         int const asf = built->stateMap().flushDirty(NodeObjectType::AccountNode);
+         int const tmf = built->txMap().flushDirty(NodeObjectType::TransactionNode);
+         JLOG(j.debug()) << "Flushed " << asf << " accounts and " << tmf << " transaction nodes";
+@@ -99,6 +101,7 @@ applyTransactions(
+     OpenView& view,
+     beast::Journal j)
+ {
++    BenchProbe probe{"ledger.apply_set"};
+     bool certainRetry = true;
+     std::size_t count = 0;
+
+diff --git a/src/xrpld/perflog/detail/PerfLogImp.cpp b/src/xrpld/perflog/detail/PerfLogImp.cpp
+index 60b6efc0a..57a7993b0 100644
+--- a/src/xrpld/perflog/detail/PerfLogImp.cpp
++++ b/src/xrpld/perflog/detail/PerfLogImp.cpp
+@@ -1,6 +1,7 @@
+ #include <xrpld/perflog/detail/PerfLogImp.h>
+
+ #include <xrpl/basics/BasicConfig.h>
++#include <xrpl/basics/BenchProbe.h>
+ #include <xrpl/basics/Log.h>
+ #include <xrpl/basics/chrono.h>
+ #include <xrpl/beast/core/CurrentThreadName.h>
+@@ -16,6 +17,7 @@
+ #include <boost/filesystem/operations.hpp>
+ #include <boost/system/detail/error_code.hpp>
+
++#include <atomic>
+ #include <chrono>
+ #include <cstdint>
+ #include <functional>
+@@ -25,12 +27,30 @@
+ #include <ostream>
+ #include <set>
+ #include <string>
++#include <string_view>
+ #include <unordered_map>
+ #include <utility>
+ #include <vector>
+
+ namespace xrpl::perf {
+
++namespace {
++
++// The probe sink is a plain function pointer, so it forwards to whichever
++// PerfLogImp is currently running through this file-local pointer. Cleared on
++// stop() so an event in flight during teardown becomes a no-op rather than a
++// dangling call.
++std::atomic<PerfLogImp*> g_activePerfLog{nullptr};
++
++void
++perfLogProbeTrampoline(std::string_view tag, std::chrono::microseconds dur)
++{
++    if (auto* p = g_activePerfLog.load(std::memory_order_acquire))
++        p->event(std::string{tag}, dur);
++}
++
++}  // namespace
++
+ PerfLogImp::Counters::Counters(std::set<char const*> const& labels, JobTypes const& jobTypes)
+ {
+     {
+@@ -251,7 +271,7 @@ PerfLogImp::run()
+             std::unique_lock<std::mutex> lock(mutex_);
+             if (cond_.wait_until(lock, lastLog_ + setup_.logInterval, [&] { return stop_; }))
+             {
+-                return;
++                break;
+             }
+             if (rotate_)
+             {
+@@ -260,7 +280,44 @@ PerfLogImp::run()
+             }
+         }
+         report();
++        flushEvents();
++    }
++    // Drain any probe events buffered since the last interval before exiting.
++    flushEvents();
++}
++
++void
++PerfLogImp::event(std::string const& tag, microseconds dur)
++{
++    if (setup_.perfLog.empty())
++        return;
++    auto const now = system_clock::now();
++    std::scoped_lock const lock(eventMutex_);
++    events_.push_back({tag, dur, now});
++}
++
++void
++PerfLogImp::flushEvents()
++{
++    if (!logFile_)
++        return;
++
++    std::vector<EventRecord> drained;
++    {
++        std::scoped_lock const lock(eventMutex_);
++        if (events_.empty())
++            return;
++        drained.swap(events_);
+     }
++
++    // Tags are controlled string literals, so no JSON escaping is needed.
++    for (auto const& e : drained)
++    {
++        logFile_ << "{\"time\":\"" << to_string(std::chrono::floor<microseconds>(e.time))
++                 << "\",\"event\":\"" << e.tag << "\",\"duration_us\":" << e.dur.count()
++                 << ",\"hostid\":\"" << hostname_ << "\"}\n";
++    }
++    logFile_.flush();
+ }
+
+ void
+@@ -454,12 +511,24 @@ void
+ PerfLogImp::start()
+ {
+     if (!setup_.perfLog.empty())
++    {
+         thread_ = std::thread(&PerfLogImp::run, this);
++        // Route the in-process verification probes to this instance.
++        g_activePerfLog.store(this, std::memory_order_release);
++        setProbeSink(&perfLogProbeTrampoline);
++    }
+ }
+
+ void
+ PerfLogImp::stop()
+ {
++    // Detach the probe sink before tearing down the buffer/thread so a verify
++    // in flight does not push into a dying instance.
++    if (g_activePerfLog.load(std::memory_order_acquire) == this)
++    {
++        setProbeSink(nullptr);
++        g_activePerfLog.store(nullptr, std::memory_order_release);
++    }
+     if (thread_.joinable())
+     {
+         {
+diff --git a/src/xrpld/perflog/detail/PerfLogImp.h b/src/xrpld/perflog/detail/PerfLogImp.h
+index bd60912c1..ab03013b5 100644
+--- a/src/xrpld/perflog/detail/PerfLogImp.h
++++ b/src/xrpld/perflog/detail/PerfLogImp.h
+@@ -111,6 +111,18 @@ class PerfLogImp : public PerfLog
+     bool stop_{false};
+     bool rotate_{false};
+
++    // Verification probe events are buffered in memory and flushed to logFile_
++    // by the background thread each interval, so the hot signature-verify path
++    // pays only a mutex lock and a push_back rather than per-event file I/O.
++    struct EventRecord
++    {
++        std::string tag;
++        microseconds dur;
++        system_time_point time;
++    };
++    std::mutex eventMutex_;
++    std::vector<EventRecord> events_;
++
+     void
+     openLog();
+     void
+@@ -118,6 +130,8 @@ class PerfLogImp : public PerfLog
+     void
+     report();
+     void
++    flushEvents();
++    void
+     rpcEnd(std::string const& method, std::uint64_t const requestId, bool finish);
+
+ public:
+@@ -152,6 +166,9 @@ public:
+     void
+     jobFinish(JobType const type, microseconds dur, int instance) override;
+
++    void
++    event(std::string const& tag, microseconds dur) override;
++
+     json::Value
+     countersJson() const override
+     {

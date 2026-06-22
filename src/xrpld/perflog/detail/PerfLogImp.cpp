@@ -1,6 +1,7 @@
 #include <xrpld/perflog/detail/PerfLogImp.h>
 
 #include <xrpl/basics/BasicConfig.h>
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/chrono.h>
 #include <xrpl/beast/core/CurrentThreadName.h>
@@ -16,6 +17,7 @@
 #include <boost/filesystem/operations.hpp>
 #include <boost/system/detail/error_code.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -25,11 +27,29 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace xrpl::perf {
+
+namespace {
+
+// The probe sink is a plain function pointer, so it forwards to whichever
+// PerfLogImp is currently running through this file-local pointer. Cleared on
+// stop() so an event in flight during teardown becomes a no-op rather than a
+// dangling call.
+std::atomic<PerfLogImp*> g_activePerfLog{nullptr};
+
+void
+perfLogProbeTrampoline(std::string_view tag, std::chrono::microseconds dur)
+{
+    if (auto* p = g_activePerfLog.load(std::memory_order_acquire))
+        p->event(std::string{tag}, dur);
+}
+
+}  // namespace
 
 PerfLogImp::Counters::Counters(std::set<char const*> const& labels, JobTypes const& jobTypes)
 {
@@ -251,7 +271,7 @@ PerfLogImp::run()
             std::unique_lock<std::mutex> lock(mutex_);
             if (cond_.wait_until(lock, lastLog_ + setup_.logInterval, [&] { return stop_; }))
             {
-                return;
+                break;
             }
             if (rotate_)
             {
@@ -260,7 +280,44 @@ PerfLogImp::run()
             }
         }
         report();
+        flushEvents();
     }
+    // Drain any probe events buffered since the last interval before exiting.
+    flushEvents();
+}
+
+void
+PerfLogImp::event(std::string const& tag, microseconds dur)
+{
+    if (setup_.perfLog.empty())
+        return;
+    auto const now = system_clock::now();
+    std::scoped_lock const lock(eventMutex_);
+    events_.push_back({tag, dur, now});
+}
+
+void
+PerfLogImp::flushEvents()
+{
+    if (!logFile_)
+        return;
+
+    std::vector<EventRecord> drained;
+    {
+        std::scoped_lock const lock(eventMutex_);
+        if (events_.empty())
+            return;
+        drained.swap(events_);
+    }
+
+    // Tags are controlled string literals, so no JSON escaping is needed.
+    for (auto const& e : drained)
+    {
+        logFile_ << "{\"time\":\"" << to_string(std::chrono::floor<microseconds>(e.time))
+                 << "\",\"event\":\"" << e.tag << "\",\"duration_us\":" << e.dur.count()
+                 << ",\"hostid\":\"" << hostname_ << "\"}\n";
+    }
+    logFile_.flush();
 }
 
 void
@@ -454,12 +511,24 @@ void
 PerfLogImp::start()
 {
     if (!setup_.perfLog.empty())
+    {
         thread_ = std::thread(&PerfLogImp::run, this);
+        // Route the in-process verification probes to this instance.
+        g_activePerfLog.store(this, std::memory_order_release);
+        setProbeSink(&perfLogProbeTrampoline);
+    }
 }
 
 void
 PerfLogImp::stop()
 {
+    // Detach the probe sink before tearing down the buffer/thread so a verify
+    // in flight does not push into a dying instance.
+    if (g_activePerfLog.load(std::memory_order_acquire) == this)
+    {
+        setProbeSink(nullptr);
+        g_activePerfLog.store(nullptr, std::memory_order_release);
+    }
     if (thread_.joinable())
     {
         {

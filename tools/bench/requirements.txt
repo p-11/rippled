@@ -1,0 +1,2 @@
+# The benchmark harness is pure Python standard library -- no third-party
+# packages are required.

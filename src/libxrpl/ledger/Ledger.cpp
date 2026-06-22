@@ -1,5 +1,6 @@
 #include <xrpl/ledger/Ledger.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/Slice.h>
 #include <xrpl/basics/UnorderedContainers.h>
@@ -531,6 +532,7 @@ Ledger::rawTxInsert(
 {
     XRPL_ASSERT(metaData, "xrpl::Ledger::rawTxInsert : non-null metadata input");
 
+    BenchProbe probe{"ledger.tx_insert"};
     // low-level - just add to table
     Serializer s(txn->getDataLength() + metaData->getDataLength() + 16);
     s.addVL(txn->peekData());

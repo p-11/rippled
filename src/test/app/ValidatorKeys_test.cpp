@@ -2,6 +2,7 @@
 #include <test/jtx/envconfig.h>
 #include <test/unit_test/utils.h>
 
+#include <xrpld/app/main/HybridValidatorTokenGen.h>
 #include <xrpld/app/misc/ValidatorKeys.h>
 #include <xrpld/core/Config.h>
 #include <xrpld/core/ConfigSections.h>
@@ -265,6 +266,22 @@ public:
                     Slice(pqWrongSec)));
             ValidatorKeys const k{c, journal};
             BEAST_EXPECT(k.configInvalid());
+        }
+
+        {
+            // A token from the production generator (xrpld
+            // --generate-hybrid-validator-token, used to stand up the DevNet)
+            // must load cleanly, including the PQ-secret-matches-manifest
+            // self-test: the generator's ephemeral PQ keypair has to line up
+            // with what ValidatorKeys verifies at startup.
+            auto const out = detail::generateHybridValidatorToken(detail::HybridTokenInputs{});
+            Config c;
+            c.section(SECTION_VALIDATOR_TOKEN)
+                .append(std::vector<std::string>{out.validatorTokenBase64});
+            ValidatorKeys const k{c, journal};
+            BEAST_EXPECT(!k.configInvalid());
+            if (BEAST_EXPECT(k.keys); k.keys.has_value())
+                BEAST_EXPECT(k.keys->pqSecretKey.has_value());
         }
     }
 };  // namespace test

@@ -139,10 +139,12 @@ words:
   - iou
   - ious
   - isrdc
+  - isinstance
   - itype
   - jemalloc
   - jlog
   - jtnofill
+  - keccak
   - keylet
   - keylets
   - keyvadb
@@ -194,6 +196,7 @@ words:
   - nftoffer
   - nftoken
   - nftokenid
+  - nohup
   - nftokenpages
   - nftokens
   - nftpage
@@ -232,6 +235,7 @@ words:
   - protobuf
   - protos
   - ptrs
+  - pycache
   - pushd
   - pyenv
   - pyparsing
@@ -245,6 +249,7 @@ words:
   - ripdtop
   - rippleci
   - rippled
+  - Ryzen
   - ripplerpc
   - rippletest
   - RLUSD

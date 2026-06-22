@@ -1,5 +1,6 @@
 #include <xrpl/protocol/STValidation.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Slice.h>
 #include <xrpl/basics/base_uint.h>
@@ -126,6 +127,8 @@ STValidation::isValid() const noexcept
             valid_ = false;
             return false;
         }
+
+        BenchProbe probe{"validation.verify"};
 
         // Serialize the signing payload once: the ECC digest is its
         // SHA-512/256, and the PQ signature verifies over the same raw bytes.
