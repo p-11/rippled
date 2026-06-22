@@ -77,6 +77,12 @@ optIn(int argc, char** argv)
     custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
     custodyMock.load();
     custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
+    if (!pqMock.exists())
+    {
+        std::cerr << "opt-in: this wallet is ECC-only (no PQ key). Run "
+                     "'keygen --quantum' to add one before opting in.\n";
+        return EXIT_FAILURE;
+    }
     pqMock.load();
 
     auto const eccPubHex = xrpl::strHex(custodyMock.publicKey());

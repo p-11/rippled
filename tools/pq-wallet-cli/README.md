@@ -22,7 +22,9 @@ tools/pq-wallet-cli/run-demo.sh
 Launches xrpld in standalone mode with the `Quantum` amendment
 pre-enabled at genesis, then walks the PoC project description flow:
 
-1. `keygen` - wallet mints fresh ECC + PQ key material.
+1. `keygen --quantum` - wallet mints fresh ECC + ML-DSA-44 key material.
+   Post-quantum is opt-in: a bare `keygen` makes an ECC-only wallet, and
+   `--quantum` adds the PQ key the account later registers on-ledger.
 2. Fund the wallet account from genesis (a curl-driven `Payment` to
    bootstrap the balance).
 3. `opt-in` - wallet `AccountSet asfQuantum` registers the PQ
@@ -42,7 +44,7 @@ Exit code `0` on full success.
 ## Subcommands
 
 ```text
-pq-wallet-cli keygen        [--wallet <path>] [--import-pq-seed <hex>]
+pq-wallet-cli keygen        [--wallet <path>] [--quantum] [--import-pq-seed <hex>]
 pq-wallet-cli fund          [--wallet <path>] [--rpc-url <url>]
                             [--amount-drops <n>] [--sequence <n>] [--fee <n>]
 pq-wallet-cli pay           [--wallet <path>] [--rpc-url <url>]
@@ -84,8 +86,8 @@ at a stock node once and drop the per-command flags:
 ```sh
 export PQ_WALLET_RPC_URL=http://127.0.0.1:5005   # DevNet stock-1
 
-pq-wallet-cli keygen --wallet alice.json
-pq-wallet-cli keygen --wallet bob.json
+pq-wallet-cli keygen --quantum --wallet alice.json   # --quantum: opt in to a PQ key
+pq-wallet-cli keygen --quantum --wallet bob.json
 pq-wallet-cli fund   --wallet alice.json
 pq-wallet-cli fund   --wallet bob.json
 pq-wallet-cli status                              # node synced, ledgers advancing
@@ -109,12 +111,14 @@ On a single-node standalone xrpld (no consensus) the ledger only advances on
 demand, so interleave a `ledger_accept` RPC between submissions; a DevNet
 closes ledgers on its own and needs none.
 
-`keygen` generates a fresh `xrpl::Seed` for the ECC half and derives
-the PQ seed via SHA-512/256 of that seed (mirroring `wallet_propose
-key_type=dilithium`), or accepts a raw 32-byte PQ seed via
-`--import-pq-seed` so an operator can rebuild the wallet around a
-server-minted key. Neither secret reaches `./pq-wallet.json`; both
-land in the corresponding mock-owned state files.
+`keygen` generates a fresh `xrpl::Seed` for the ECC half. Post-quantum is
+opt-in: `--quantum` (or `--import-pq-seed`) also derives the PQ seed via
+SHA-512/256 of that seed (mirroring `wallet_propose key_type=dilithium`), or
+accepts a raw 32-byte PQ seed via `--import-pq-seed` so an operator can rebuild
+the wallet around a server-minted key. A bare `keygen` writes no PQ state file
+at all, leaving an ECC-only wallet that can `fund` and `pay` (ECC-only) but
+must run `keygen --quantum` before it can `opt-in`. No secret reaches
+`./pq-wallet.json`; each lands in its corresponding mock-owned state file.
 
 `sign-tx` writes two artifacts: the raw `tx_blob` hex on stdout, and
 a JSON sidecar (default `./signed-tx.json`) carrying the five fields
@@ -138,7 +142,7 @@ operations:
   service; in this PoC it loads its locally persisted secret and
   calls `xrpl::sign` in-process.
 
-The mock persists its state to `./pq-wallet.custody.json` (a sibling
+The mock persists its state to `./pq-wallet.ecc-custody.json` (a sibling
 of `./pq-wallet.json`). The wallet binary never opens that file
 directly; only the mock module does. The boundary is enforced at the
 filesystem level so the swap-for-real seam stays honest even under a
@@ -162,7 +166,7 @@ structure. Both mocks live in the same `pqwallet::custody` namespace.
 Persistence stores only the 32-byte PQ seed; `xrpl::pqKeypair`
 deterministically expands it back to the full 1,312-byte ML-DSA-44
 public key and 2,560-byte secret key on load. State lives in
-`./pq-wallet.pq.json` with the same wallet-binary-never-opens-it
+`./pq-wallet.pq-custody.json` with the same wallet-binary-never-opens-it
 discipline.
 
 Setting `PQ_CUSTODY_FAIL=1` mirrors `RIPPLE_CUSTODY_FAIL` for the

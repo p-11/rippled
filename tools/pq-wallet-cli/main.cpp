@@ -15,10 +15,12 @@ Usage:
   pq-wallet-cli <command> [options]
 
 Commands:
-  keygen          Generate (or import) the ECC + PQ keypair and persist wallet state.
+  keygen          Generate an ECC-only wallet; add --quantum for the ECC + ML-DSA-44
+                  keypair (post-quantum is opt-in). Persists wallet state.
   fund            Airdrop XRP from genesis to the wallet account (no node sign RPC).
-  pay             Hybrid-sign and submit a Payment in one step (--ecc-only for the
-                  bad-weather test that an opted-in account rejects with tefBAD_AUTH).
+  pay             Sign and submit a Payment in one step. Hybrid if the wallet has a PQ
+                  key, ECC-only otherwise; --ecc-only forces the bad-weather test that
+                  an opted-in account rejects with tefBAD_AUTH.
   status          Summarize a node's server_info (state, ledgers, peers).
   opt-in          Register the wallet's PQ pubkey on its AccountRoot via AccountSet asfQuantum.
   sign-tx         Build, hybrid-sign, and emit a Payment transaction (custody sidecar).
@@ -27,8 +29,9 @@ Commands:
 
 Common options:
   --wallet <path>     Wallet state file. Defaults to ./pq-wallet.json.
-                      Secret material lives in <path>.custody.json (ECC mock)
-                      and <path>.pq.json (PQ custody mock); the wallet binary
+                      Secret material lives in <path>.ecc-custody.json (ECC mock)
+                      and <path>.pq-custody.json (PQ custody mock, absent for an
+                      ECC-only wallet); the wallet binary
                       never opens those files directly.
   --rpc-url <url>     Hybrid-aware xrpld JSON-RPC endpoint. Defaults to
                       $PQ_WALLET_RPC_URL if set, else http://127.0.0.1:5050
