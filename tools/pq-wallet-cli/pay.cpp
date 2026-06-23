@@ -109,7 +109,12 @@ pay(int argc, char** argv)
     custody::EccCustodyMock custodyMock(state::custodyStateFileFor(args.walletPath));
     custodyMock.load();
     custody::PqCustodyMock pqMock(state::pqStateFileFor(args.walletPath));
-    pqMock.load();
+    // An ECC-only wallet (keygen without --quantum) has no PQ key, so it pays
+    // ECC-only; a hybrid wallet pays hybrid unless --ecc-only forces the
+    // bad-weather test below.
+    bool const hasPq = pqMock.exists();
+    if (hasPq)
+        pqMock.load();
 
     json::Value tx(json::ValueType::Object);
     tx[xrpl::jss::TransactionType] = "Payment";
@@ -122,11 +127,12 @@ pay(int argc, char** argv)
 
     std::string txBlobHex;
     std::string txHash;
-    if (args.eccOnly)
+    if (args.eccOnly || !hasPq)
     {
-        // Bad-weather test: sign the classical signature only. Once the
-        // source account has opted in to hybrid, the server rejects this
-        // with tefBAD_AUTH (Transactor: account requires a quantum signature).
+        // ECC-only signature. Two cases land here: an ECC-only wallet that has
+        // no PQ key to sign with, and the --ecc-only bad-weather test, where an
+        // already-opted-in account's ECC-only tx is rejected with tefBAD_AUTH
+        // (Transactor: account requires a quantum signature).
         auto const signed_ = sign::eccSignFromJson(
             "pay", tx, [&](xrpl::Slice payload) { return custodyMock.signWithECC(payload); });
         txBlobHex = signed_.txBlobHex;

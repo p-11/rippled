@@ -38,8 +38,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rm -rf "$DATA_DIR" "$WALLET_PATH" "${WALLET_PATH%.json}.custody.json" \
-    "${WALLET_PATH%.json}.pq.json" "$SIDECAR"
+rm -rf "$DATA_DIR" "$WALLET_PATH" "${WALLET_PATH%.json}.ecc-custody.json" \
+    "${WALLET_PATH%.json}.pq-custody.json" "$SIDECAR"
 mkdir -p "$DATA_DIR/db"
 
 echo "==> Launching rippled standalone (port 5050, Quantum pre-enabled)"
@@ -64,8 +64,8 @@ for _ in $(seq 1 60); do
 done
 rpc ledger_accept '{}' >/dev/null
 
-echo "==> Step 1: wallet keygen"
-"$WALLET_BIN" keygen --wallet "$WALLET_PATH"
+echo "==> Step 1: wallet keygen (--quantum: opt in to a post-quantum key)"
+"$WALLET_BIN" keygen --quantum --wallet "$WALLET_PATH"
 ACCOUNT="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['account_id'])" "$WALLET_PATH")"
 echo "    wallet account: $ACCOUNT"
 

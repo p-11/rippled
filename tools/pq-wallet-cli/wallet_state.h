@@ -19,8 +19,9 @@ struct WalletState
 };
 
 // Derive the two mock state-file paths from the wallet state file path.
-// <wallet>.custody.json holds the ECC mock's secret material;
-// <wallet>.pq.json holds the PQ custody mock's 32-byte seed.
+// <wallet>.ecc-custody.json holds the ECC mock's secret material;
+// <wallet>.pq-custody.json holds the PQ custody mock's 32-byte seed
+// (absent for an ECC-only wallet).
 std::filesystem::path
 custodyStateFileFor(std::filesystem::path const& walletStateFile);
 

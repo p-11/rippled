@@ -32,13 +32,13 @@ siblingStateFile(std::filesystem::path const& walletStateFile, std::string const
 std::filesystem::path
 custodyStateFileFor(std::filesystem::path const& walletStateFile)
 {
-    return siblingStateFile(walletStateFile, ".custody.json");
+    return siblingStateFile(walletStateFile, ".ecc-custody.json");
 }
 
 std::filesystem::path
 pqStateFileFor(std::filesystem::path const& walletStateFile)
 {
-    return siblingStateFile(walletStateFile, ".pq.json");
+    return siblingStateFile(walletStateFile, ".pq-custody.json");
 }
 
 bool
@@ -99,7 +99,9 @@ load(std::filesystem::path const& walletStateFile)
     s.algorithm = root.get(kAlgorithmField, "").asString();
     s.pqPublicKeyHex = root.get(kPqPublicKeyField, "").asString();
 
-    if (s.accountId.empty() || s.eccPublicKeyHex.empty() || s.pqPublicKeyHex.empty())
+    // The PQ fields are optional: an ECC-only wallet (keygen without --quantum)
+    // leaves them empty. Only the ECC identity is required.
+    if (s.accountId.empty() || s.eccPublicKeyHex.empty())
         throw std::runtime_error("Wallet state file is missing required fields");
 
     return s;
