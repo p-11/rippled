@@ -165,24 +165,24 @@ different question.
 ## Regenerating all the numbers
 
 The simplest path is `run-sweep.sh --repeats 3`, which runs every configuration in
-order (the open-loop rate-ramp throughout, with a per-signer-count rate band for the
-multi-sign runs), writes a `results/<label>/report.md` per run, and packs them at the
-end. The rest of this section lists the individual runs behind it, for when you want
-to refresh one.
+order (the open-loop rate-ramp for the throughput configs, plus the per-signer verify
+N-curve for multi-sign, both hybrid and an ECC baseline), writes a
+`results/<label>/report.md` per run, and packs them at the end. The rest of this
+section lists the individual runs behind it, for when you want to refresh one.
 
 Each `run-suite.sh` invocation writes its own `results/<label>/report.md`. The
 per-config commands are in "Running" above, plus the second AVX2 pass
 (`--profile amendment-off --avx2`); run them one at a time, since they share ports.
 Each one covers:
 
-| Run                                 | What it measures                                   |
-| ----------------------------------- | -------------------------------------------------- |
-| `upstream`                          | ECC throughput/verify baseline                     |
-| `amendment-off`                     | ECC-path regression, ECC verify, ECC disk baseline |
-| `hybrid`                            | hybrid throughput, verify, resources, disk         |
-| `hybrid-avx2`, `amendment-off-avx2` | AVX2 verify overhead                               |
-| `multisign`                         | per-signer verify N-curve                          |
-| `ms-throughput`                     | multi-sign throughput by N                         |
+| Run                                 | What it measures                                    |
+| ----------------------------------- | --------------------------------------------------- |
+| `upstream`                          | ECC throughput/verify baseline                      |
+| `amendment-off`                     | ECC-path regression, ECC verify, ECC disk baseline  |
+| `hybrid`                            | hybrid throughput, verify, resources, disk          |
+| `hybrid-avx2`, `amendment-off-avx2` | AVX2 verify overhead                                |
+| `multisign` / `multisign-ecc`       | per-signer verify N-curve (hybrid and ECC baseline) |
+| `ms-throughput`                     | multi-sign throughput by N (not in the sweep)       |
 
 The crypto microbench and signature/payload sizes come out of every run, and each
 run's `report.md` records the machine it ran on from `fingerprint.json`.
