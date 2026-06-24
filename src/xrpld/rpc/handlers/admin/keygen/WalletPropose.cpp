@@ -3,11 +3,13 @@
 #include <xrpld/rpc/Context.h>
 #include <xrpld/rpc/detail/RPCHelpers.h>
 
+#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/strHex.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/AccountID.h>
 #include <xrpl/protocol/ErrorCodes.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/RPCErr.h>
 #include <xrpl/protocol/SecretKey.h>
@@ -124,8 +126,6 @@ walletPropose(json::Value const& params)
     if (!keyType)
         keyType = KeyType::Secp256k1;
 
-    auto const publicKey = generateKeyPair(*keyType, *seed).first;
-
     json::Value obj(json::ValueType::Object);
 
     auto const seed1751 = seedAs1751(*seed);
@@ -135,10 +135,31 @@ walletPropose(json::Value const& params)
     obj[jss::master_seed] = seedBase58;
     obj[jss::master_seed_hex] = seedHex;
     obj[jss::master_key] = seed1751;
-    obj[jss::account_id] = toBase58(calcAccountID(publicKey));
-    obj[jss::public_key] = toBase58(TokenType::AccountPublic, publicKey);
-    obj[jss::key_type] = to_string(*keyType);
-    obj[jss::public_key_hex] = strHex(publicKey);
+
+    if (*keyType == KeyType::Dilithium)
+    {
+        // The derivation rule lives in pqSeedFromSeed (shared with the
+        // custody CLI tooling). The resulting hex seed is what clients pass
+        // back to sign / sign_for, so it appears in the response alongside
+        // the full public/secret keys.
+        auto const pqSeed = pqSeedFromSeed(*seed);
+        auto const pqSeedSlice = Slice(pqSeed.data(), pqSeed.size());
+        auto const [pqPub, pqSec] = pqKeypair(pqSeedSlice);
+
+        obj[jss::pq_seed_hex] = strHex(pqSeedSlice);
+        obj[jss::public_key_hex] = strHex(Slice(pqPub.data(), pqPub.size()));
+        obj[jss::secret_key_hex] = strHex(Slice(pqSec.data(), pqSec.size()));
+        obj[jss::key_type] = to_string(*keyType);
+    }
+    else
+    {
+        auto const publicKey = generateKeyPair(*keyType, *seed).first;
+
+        obj[jss::account_id] = toBase58(calcAccountID(publicKey));
+        obj[jss::public_key] = toBase58(TokenType::AccountPublic, publicKey);
+        obj[jss::key_type] = to_string(*keyType);
+        obj[jss::public_key_hex] = strHex(publicKey);
+    }
 
     // If a passphrase was specified, and it was hashed and used as a seed
     // run a quick entropy check and add an appropriate warning, because

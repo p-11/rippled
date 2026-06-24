@@ -1,5 +1,6 @@
 #pragma once
 
+#include <xrpl/basics/Buffer.h>
 #include <xrpl/basics/UnorderedContainers.h>
 #include <xrpl/beast/utility/Journal.h>
 #include <xrpl/protocol/PublicKey.h>
@@ -78,6 +79,14 @@ struct Manifest
     /// The domain, if one was specified in the manifest; empty otherwise.
     std::string domain;
 
+    /// Hybrid manifests: the long-term ML-DSA-44 master public key.
+    /// Set together with quantumSigningKey or both unset.
+    std::optional<Buffer> quantumMasterKey;
+
+    /// Hybrid manifests: the rotatable ML-DSA-44 ephemeral public key
+    /// used to sign STValidations and consensus proposals.
+    std::optional<Buffer> quantumSigningKey;
+
     Manifest() = delete;
 
     Manifest(
@@ -85,12 +94,16 @@ struct Manifest
         PublicKey const& masterKey,
         std::optional<PublicKey> const& signingKey,
         std::uint32_t seq,
-        std::string domain)
+        std::string domain,
+        std::optional<Buffer> quantumMasterKey = std::nullopt,
+        std::optional<Buffer> quantumSigningKey = std::nullopt)
         : serialized(std::move(serialized))
         , masterKey(masterKey)
         , signingKey(signingKey)
         , sequence(seq)
         , domain(std::move(domain))
+        , quantumMasterKey(std::move(quantumMasterKey))
+        , quantumSigningKey(std::move(quantumSigningKey))
     {
     }
 
@@ -185,12 +198,38 @@ struct ValidatorToken
 {
     std::string manifest;
     SecretKey validationSecret;
+
+    /// Hybrid validators: the ML-DSA-44 ephemeral secret key paired with
+    /// the manifest's quantumSigningKey. Empty for ECC-only validators.
+    std::optional<Buffer> pqValidationSecret;
 };
 
 std::optional<ValidatorToken>
 loadValidatorToken(
     std::vector<std::string> const& blob,
     beast::Journal journal = beast::Journal(beast::Journal::getNullSink()));
+
+/** Outcome of checking a received message's PQ material against the
+    validator manifest's declared PQ ephemeral pubkey. */
+enum class PqBindingCheck { Ok, Mismatch, MissingPqSig };
+
+/** Apply the manifest PQ-binding rule shared by the validation and proposal
+    ingress paths.
+
+    - ECC-only validators (no manifest PQ key) always pass.
+    - A declared PQ pubkey that differs from the manifest's is a forgery
+      attempt (e.g. a stolen ECC key paired with the attacker's own PQ
+      keypair): Mismatch, regardless of fail-open/closed.
+    - Under failClosed, a hybrid validator's message that carries no PQ
+      signature is dropped: MissingPqSig. Under fail-open it passes, which is
+      the deliberate mixed-network rollout window.
+*/
+[[nodiscard]] PqBindingCheck
+pqBindingCheck(
+    std::optional<Buffer> const& manifestPq,
+    std::optional<Slice> declaredPqPub,
+    bool hasPqSig,
+    bool failClosed) noexcept;
 
 enum class ManifestDisposition {
     /// Manifest is valid
@@ -270,6 +309,35 @@ public:
     */
     std::optional<PublicKey>
     getSigningKey(PublicKey const& pk) const;
+
+    /** Returns master key's current PQ ephemeral signing key, if declared.
+
+        @param pk Master public key
+
+        @return Engaged optional with the ML-DSA-44 pubkey bytes when the
+                active manifest for `pk` is hybrid; std::nullopt otherwise.
+
+        @par Thread Safety
+
+        May be called concurrently
+    */
+    std::optional<Buffer>
+    getQuantumSigningKey(PublicKey const& pk) const;
+
+    /** Returns master key's PQ master public key, if declared.
+
+        @param pk Master public key
+
+        @return Engaged optional with the ML-DSA-44 master pubkey bytes
+                when the active manifest for `pk` is hybrid; std::nullopt
+                otherwise.
+
+        @par Thread Safety
+
+        May be called concurrently
+    */
+    std::optional<Buffer>
+    getQuantumMasterKey(PublicKey const& pk) const;
 
     /** Returns ephemeral signing key's master public key.
 

@@ -10,6 +10,7 @@
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STObject.h>
@@ -17,6 +18,7 @@
 #include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/Sign.h>
+#include <xrpl/protocol/detail/mldsa.h>
 #include <xrpl/protocol/tokens.h>
 #include <xrpl/server/Manifest.h>
 #include <xrpl/server/Wallet.h>
@@ -211,8 +213,244 @@ public:
     static Manifest
     clone(Manifest const& m)
     {
-        Manifest m2(m.serialized, m.masterKey, m.signingKey, m.sequence, m.domain);
+        Manifest m2(
+            m.serialized,
+            m.masterKey,
+            m.signingKey,
+            m.sequence,
+            m.domain,
+            m.quantumMasterKey,
+            m.quantumSigningKey);
         return m2;
+    }
+
+    Manifest
+    makeHybridManifest(
+        SecretKey const& sk,
+        KeyType type,
+        SecretKey const& ssk,
+        KeyType stype,
+        Slice pqMasterPub,
+        Slice pqMasterSec,
+        Slice pqEphemeralPub,
+        Slice pqEphemeralSec,
+        int seq)
+    {
+        auto const pk = derivePublicKey(type, sk);
+        auto const spk = derivePublicKey(stype, ssk);
+
+        STObject st(sfGeneric);
+        st[sfSequence] = seq;
+        st[sfPublicKey] = pk;
+        st[sfSigningPubKey] = spk;
+        st.setFieldVL(sfQuantumPubKey, pqEphemeralPub);
+        st.setFieldVL(sfQuantumMasterPublicKey, pqMasterPub);
+
+        // Both PQ pubkeys are signing fields, so the ECC signatures
+        // below commit to them; ECC and PQ signatures are NotSigning so
+        // they do not interfere with each other's signed payloads.
+        sign(st, HashPrefix::Manifest, stype, ssk);
+        sign(st, HashPrefix::Manifest, type, sk, sfMasterSignature);
+        pqSign(st, HashPrefix::Manifest, pqEphemeralSec, sfQuantumSignature);
+        pqSign(st, HashPrefix::Manifest, pqMasterSec, sfQuantumMasterSignature);
+
+        BEAST_EXPECT(verify(st, HashPrefix::Manifest, spk));
+        BEAST_EXPECT(verify(st, HashPrefix::Manifest, pk, sfMasterSignature));
+        BEAST_EXPECT(pqVerify(st, HashPrefix::Manifest, pqEphemeralPub, sfQuantumSignature));
+        BEAST_EXPECT(pqVerify(st, HashPrefix::Manifest, pqMasterPub, sfQuantumMasterSignature));
+
+        Serializer s;
+        st.add(s);
+        std::string const m(static_cast<char const*>(s.data()), s.size());
+        if (auto r = deserializeManifest(m))
+            return std::move(*r);
+        Throw<std::runtime_error>("Could not create a hybrid manifest");
+        return *deserializeManifest(std::string{});  // silence warning
+    }
+
+    void
+    testHybridManifest()
+    {
+        testcase("hybrid manifest sign / verify");
+
+        auto const sk = randomSecretKey();
+        auto const ssk = randomSecretKey();
+        auto [pqMasterPub, pqMasterSec] = mldsa::keypair();
+        auto [pqEphemeralPub, pqEphemeralSec] = mldsa::keypair();
+
+        auto const m = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            ssk,
+            KeyType::Secp256k1,
+            Slice(pqMasterPub),
+            Slice(pqMasterSec),
+            Slice(pqEphemeralPub),
+            Slice(pqEphemeralSec),
+            7);
+
+        BEAST_EXPECT(m.verify());
+        BEAST_EXPECT(m.quantumMasterKey);
+        BEAST_EXPECT(m.quantumSigningKey);
+        BEAST_EXPECT(m.quantumMasterKey->size() == kPQPublicKeySize);
+        BEAST_EXPECT(m.quantumSigningKey->size() == kPQPublicKeySize);
+
+        // Tampering the on-wire PQ master signature breaks verify.
+        std::string corrupted = m.serialized;
+        corrupted[corrupted.size() - 5] ^= 0x01;
+        auto const reparsed = deserializeManifest(corrupted);
+        if (BEAST_EXPECT(reparsed))
+            BEAST_EXPECT(!reparsed->verify());
+
+        // Revocation manifests must not carry PQ fields; the deserializer
+        // rejects them outright.
+        STObject revoke(sfGeneric);
+        revoke[sfSequence] = std::numeric_limits<std::uint32_t>::max();
+        revoke[sfPublicKey] = derivePublicKey(KeyType::Ed25519, sk);
+        revoke.setFieldVL(sfQuantumMasterPublicKey, Slice(pqMasterPub));
+        revoke.setFieldVL(sfQuantumPubKey, Slice(pqEphemeralPub));
+        sign(revoke, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        pqSign(revoke, HashPrefix::Manifest, Slice(pqMasterSec), sfQuantumMasterSignature);
+        pqSign(revoke, HashPrefix::Manifest, Slice(pqEphemeralSec), sfQuantumSignature);
+        Serializer rs;
+        revoke.add(rs);
+        std::string const revStr(reinterpret_cast<char const*>(rs.data()), rs.size());
+        BEAST_EXPECT(!deserializeManifest(revStr));
+
+        // Dropping a PQ field (any one of the four) yields an inconsistent
+        // set; the deserializer rejects partial PQ.
+        STObject partial(sfGeneric);
+        partial[sfSequence] = 8;
+        partial[sfPublicKey] = derivePublicKey(KeyType::Ed25519, sk);
+        partial[sfSigningPubKey] = derivePublicKey(KeyType::Secp256k1, ssk);
+        partial.setFieldVL(sfQuantumPubKey, Slice(pqEphemeralPub));
+        sign(partial, HashPrefix::Manifest, KeyType::Secp256k1, ssk);
+        sign(partial, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        Serializer ps;
+        partial.add(ps);
+        std::string const partStr(reinterpret_cast<char const*>(ps.data()), ps.size());
+        BEAST_EXPECT(!deserializeManifest(partStr));
+    }
+
+    void
+    testPqContinuity()
+    {
+        testcase("hybrid manifest cannot be downgraded to ECC-only");
+
+        auto const sk = randomSecretKey();
+        auto const kp0 = randomKeyPair(KeyType::Secp256k1);
+        auto [pqMPub, pqMSec] = mldsa::keypair();
+        auto [pqEPub, pqESec] = mldsa::keypair();
+
+        ManifestCache cache;
+        auto const hybrid = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp0.second,
+            KeyType::Secp256k1,
+            Slice(pqMPub),
+            Slice(pqMSec),
+            Slice(pqEPub),
+            Slice(pqESec),
+            0);
+        BEAST_EXPECT(cache.applyManifest(clone(hybrid)) == ManifestDisposition::Accepted);
+
+        // Higher-sequence ECC-only manifest: an attacker with only the
+        // recovered ECC master secret can mint this; it must be refused.
+        auto const kp1 = randomKeyPair(KeyType::Secp256k1);
+        auto const eccOnly = makeManifest(sk, KeyType::Ed25519, kp1.second, KeyType::Secp256k1, 1);
+        BEAST_EXPECT(cache.applyManifest(clone(eccOnly)) == ManifestDisposition::Invalid);
+
+        // Higher-sequence hybrid manifest with a different PQ master is the
+        // same downgrade in disguise.
+        auto [pqM2Pub, pqM2Sec] = mldsa::keypair();
+        auto [pqE2Pub, pqE2Sec] = mldsa::keypair();
+        auto const swappedMaster = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp1.second,
+            KeyType::Secp256k1,
+            Slice(pqM2Pub),
+            Slice(pqM2Sec),
+            Slice(pqE2Pub),
+            Slice(pqE2Sec),
+            1);
+        BEAST_EXPECT(cache.applyManifest(clone(swappedMaster)) == ManifestDisposition::Invalid);
+
+        // Rotating only the ephemerals under the same PQ master is the
+        // legitimate path and must keep working.
+        auto const rotated = makeHybridManifest(
+            sk,
+            KeyType::Ed25519,
+            kp1.second,
+            KeyType::Secp256k1,
+            Slice(pqMPub),
+            Slice(pqMSec),
+            Slice(pqE2Pub),
+            Slice(pqE2Sec),
+            1);
+        BEAST_EXPECT(cache.applyManifest(clone(rotated)) == ManifestDisposition::Accepted);
+
+        // Revocation (seq = max, no PQ fields) must still be honoured: it
+        // neuters the validator rather than re-keying it.
+        BEAST_EXPECT(
+            cache.applyManifest(makeRevocation(sk, KeyType::Ed25519)) ==
+            ManifestDisposition::Accepted);
+    }
+
+    void
+    testVerifyMissingSignature()
+    {
+        testcase("verify() rejects a manifest missing a signature field");
+
+        auto const sk = randomSecretKey();
+        auto const kp = randomKeyPair(KeyType::Secp256k1);
+        auto const masterPub = derivePublicKey(KeyType::Ed25519, sk);
+
+        // Non-revoked manifest serialized WITHOUT sfSignature. Built via the
+        // raw constructor so it bypasses deserializeManifest's presence
+        // checks. verify() must reject it (return false), not throw out of
+        // the reader when it reads the absent signature field.
+        STObject st(sfGeneric);
+        st[sfSequence] = 1;
+        st[sfPublicKey] = masterPub;
+        st[sfSigningPubKey] = kp.first;
+        sign(st, HashPrefix::Manifest, KeyType::Ed25519, sk, sfMasterSignature);
+        Serializer s;
+        st.add(s);
+        std::string serialized(static_cast<char const*>(s.data()), s.size());
+
+        Manifest const m(std::move(serialized), masterPub, kp.first, 1, "");
+        BEAST_EXPECT(!m.verify());
+    }
+
+    void
+    testPqBindingCheck()
+    {
+        testcase("pqBindingCheck outcomes");
+
+        auto [pqPub, pqSec] = mldsa::keypair();
+        auto [otherPub, otherSec] = mldsa::keypair();
+        std::optional<Buffer> const manifestPq{Buffer{pqPub.data(), pqPub.size()}};
+        std::optional<Buffer> const noManifestPq;
+
+        // ECC-only validator: everything passes, even declared PQ material.
+        BEAST_EXPECT(pqBindingCheck(noManifestPq, std::nullopt, false, true) == PqBindingCheck::Ok);
+        BEAST_EXPECT(
+            pqBindingCheck(noManifestPq, Slice(otherPub), true, true) == PqBindingCheck::Ok);
+
+        // Hybrid validator, matching declared pubkey: ok.
+        BEAST_EXPECT(pqBindingCheck(manifestPq, Slice(pqPub), true, false) == PqBindingCheck::Ok);
+
+        // Hybrid validator, mismatched declared pubkey: forgery attempt,
+        // rejected regardless of fail-open/closed.
+        BEAST_EXPECT(
+            pqBindingCheck(manifestPq, Slice(otherPub), true, false) == PqBindingCheck::Mismatch);
+
+        // Hybrid validator, no PQ material: only fail-closed rejects.
+        BEAST_EXPECT(pqBindingCheck(manifestPq, std::nullopt, false, false) == PqBindingCheck::Ok);
+        BEAST_EXPECT(
+            pqBindingCheck(manifestPq, std::nullopt, false, true) == PqBindingCheck::MissingPqSig);
     }
 
     void
@@ -944,6 +1182,10 @@ public:
         testManifestDeserialization();
         testManifestDomainNames();
         testManifestVersioning();
+        testHybridManifest();
+        testPqContinuity();
+        testVerifyMissingSignature();
+        testPqBindingCheck();
     }
 };
 

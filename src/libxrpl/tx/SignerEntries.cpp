@@ -44,8 +44,11 @@ SignerEntries::deserialize(STObject const& obj, beast::Journal journal, std::str
         AccountID const account = sEntry.getAccountID(sfAccount);
         std::uint16_t const weight = sEntry.getFieldU16(sfSignerWeight);
         std::optional<uint256> const tag = sEntry.at(~sfWalletLocator);
+        std::optional<Blob> pqPub;
+        if (sEntry.isFieldPresent(sfQuantumPubKey))
+            pqPub = sEntry.getFieldVL(sfQuantumPubKey);
 
-        accountVec.emplace_back(account, weight, tag);
+        accountVec.emplace_back(account, weight, tag, std::move(pqPub));
     }
     return accountVec;
 }

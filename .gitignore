@@ -13,6 +13,9 @@
 Debug/
 Release/
 /.build/
+/.build-avx2/
+/.build-develop/
+/.upstream-baseline/
 /.venv/
 /build/
 /db/
@@ -86,3 +89,11 @@ __pycache__
 
 # clangd cache
 /.cache
+
+# PQ custody wallet CLI runtime state (transient demo artifacts, never committed).
+*.ecc-custody.json
+*.pq-custody.json
+/pq-wallet.json
+/signed-tx.json
+/alice.json
+/bob.json

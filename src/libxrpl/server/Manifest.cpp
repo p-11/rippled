@@ -1,5 +1,6 @@
 #include <xrpl/server/Manifest.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/Slice.h>
@@ -12,6 +13,7 @@
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SOTemplate.h>
@@ -27,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -85,6 +88,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         // - a signature using the ephemeral signing key, if it is present
         {sfSignature, SoeOptional},
+
+        // featureQuantum: hybrid manifests carry an ML-DSA-44 master key
+        // and ephemeral key with signatures from each. All four PQ fields
+        // are present together, or none are present.
+        {sfQuantumMasterPublicKey, SoeOptional},
+        {sfQuantumMasterSignature, SoeOptional},
+        {sfQuantumPubKey, SoeOptional},
+        {sfQuantumSignature, SoeOptional},
     };
 
     try
@@ -122,6 +133,14 @@ deserializeManifest(Slice s, beast::Journal journal)
 
         bool const hasEphemeralKey = st.isFieldPresent(sfSigningPubKey);
         bool const hasEphemeralSig = st.isFieldPresent(sfSignature);
+        bool const hasPqMasterKey = st.isFieldPresent(sfQuantumMasterPublicKey);
+        bool const hasPqMasterSig = st.isFieldPresent(sfQuantumMasterSignature);
+        bool const hasPqEphemeralKey = st.isFieldPresent(sfQuantumPubKey);
+        bool const hasPqEphemeralSig = st.isFieldPresent(sfQuantumSignature);
+        bool const anyPq =
+            hasPqMasterKey || hasPqMasterSig || hasPqEphemeralKey || hasPqEphemeralSig;
+        bool const allPq =
+            hasPqMasterKey && hasPqMasterSig && hasPqEphemeralKey && hasPqEphemeralSig;
 
         if (Manifest::revoked(seq))
         {
@@ -131,6 +150,10 @@ deserializeManifest(Slice s, beast::Journal journal)
                 return std::nullopt;
 
             if (hasEphemeralSig)
+                return std::nullopt;
+
+            // Revocation manifests carry no PQ material either.
+            if (anyPq)
                 return std::nullopt;
         }
         else
@@ -153,12 +176,37 @@ deserializeManifest(Slice s, beast::Journal journal)
             // The signing and master keys can't be the same
             if (*signingKey == masterKey)
                 return std::nullopt;
+
+            // Hybrid manifests must carry all four PQ fields together.
+            if (anyPq && !allPq)
+                return std::nullopt;
+        }
+
+        std::optional<Buffer> quantumMasterKey;
+        std::optional<Buffer> quantumSigningKey;
+        if (hasPqMasterKey && hasPqEphemeralKey)
+        {
+            auto const pqMaster = st.getFieldVL(sfQuantumMasterPublicKey);
+            auto const pqEphemeral = st.getFieldVL(sfQuantumPubKey);
+
+            if (pqMaster.size() != kPQPublicKeySize || pqEphemeral.size() != kPQPublicKeySize)
+                return std::nullopt;
+
+            quantumMasterKey.emplace(pqMaster.data(), pqMaster.size());
+            quantumSigningKey.emplace(pqEphemeral.data(), pqEphemeral.size());
         }
 
         std::string const serialized(reinterpret_cast<char const*>(s.data()), s.size());
 
         // If the manifest is revoked, then the signingKey will be unseated
-        return Manifest(serialized, masterKey, signingKey, seq, domain);
+        return Manifest(
+            serialized,
+            masterKey,
+            signingKey,
+            seq,
+            domain,
+            std::move(quantumMasterKey),
+            std::move(quantumSigningKey));
     }
     catch (std::exception const& ex)
     {
@@ -193,6 +241,8 @@ logMftAct(
 bool
 Manifest::verify() const
 {
+    BenchProbe probe{"manifest.verify"};
+
     STObject st(sfGeneric);
     SerialIter sit(serialized.data(), serialized.size());
     st.set(sit);
@@ -202,12 +252,53 @@ Manifest::verify() const
     if (!revoked() && !signingKey)
         return false;
 
-    // Signing key and signature are not required for
-    // master key revocations
-    if (!revoked() && !xrpl::verify(st, HashPrefix::Manifest, *signingKey))
+    // Serialize the signing payload once and verify all (up to four)
+    // signatures against the same bytes, instead of re-serializing the
+    // manifest inside each xrpl::verify / pqVerify call.
+    Serializer ss;
+    ss.add32(HashPrefix::Manifest);
+    st.addWithoutSigningFields(ss);
+    Slice const payload = ss.slice();
+
+    // Signatures are read zero-copy via the optional accessor (st[~field])
+    // rather than getFieldVL, which matters for the 2420-byte PQ signatures
+    // on this per-manifest verify path (peer handshake, manifest relay, UNL
+    // refresh). The optional form also lets verify() fail safe: a manifest
+    // missing a required signature field is rejected rather than throwing
+    // out of verify() (deserializeManifest guarantees presence today, but a
+    // directly-constructed manifest must not crash the caller).
+
+    // Signing key and signature are not required for master key revocations.
+    if (!revoked())
+    {
+        auto const sig = st[~sfSignature];
+        if (!sig || !xrpl::verify(*signingKey, payload, *sig))
+            return false;
+    }
+
+    if (auto const sig = st[~sfMasterSignature]; !sig || !xrpl::verify(masterKey, payload, *sig))
         return false;
 
-    return xrpl::verify(st, HashPrefix::Manifest, masterKey, sfMasterSignature);
+    // Hybrid manifests: both PQ signatures must verify against the
+    // declared PQ master and ephemeral pubkeys. The deserializer
+    // guarantees all-four-or-none consistency, so the presence of
+    // quantumMasterKey is enough to imply the entire pair is set on `st`.
+    if (quantumMasterKey)
+    {
+        auto const mSig = st[~sfQuantumMasterSignature];
+        if (!mSig ||
+            !xrpl::pqVerify(
+                Slice(quantumMasterKey->data(), quantumMasterKey->size()), payload, *mSig))
+            return false;
+
+        auto const eSig = st[~sfQuantumSignature];
+        if (!eSig ||
+            !xrpl::pqVerify(
+                Slice(quantumSigningKey->data(), quantumSigningKey->size()), payload, *eSig))
+            return false;
+    }
+
+    return true;
 }
 
 uint256
@@ -257,6 +348,27 @@ Manifest::getMasterSignature() const
     return st.getFieldVL(sfMasterSignature);
 }
 
+PqBindingCheck
+pqBindingCheck(
+    std::optional<Buffer> const& manifestPq,
+    std::optional<Slice> declaredPqPub,
+    bool hasPqSig,
+    bool failClosed) noexcept
+{
+    if (!manifestPq)
+        return PqBindingCheck::Ok;
+
+    if (declaredPqPub &&
+        (declaredPqPub->size() != manifestPq->size() ||
+         std::memcmp(declaredPqPub->data(), manifestPq->data(), manifestPq->size()) != 0))
+        return PqBindingCheck::Mismatch;
+
+    if (failClosed && !hasPqSig)
+        return PqBindingCheck::MissingPqSig;
+
+    return PqBindingCheck::Ok;
+}
+
 std::optional<ValidatorToken>
 loadValidatorToken(std::vector<std::string> const& blob, beast::Journal journal)
 {
@@ -290,8 +402,20 @@ loadValidatorToken(std::vector<std::string> const& blob, beast::Journal journal)
 
                 if (key && key->size() == 32)
                 {
+                    std::optional<Buffer> pqSecret;
+                    auto const pq = token.get("pq_validation_secret_key", json::Value{});
+                    if (pq.isString())
+                    {
+                        auto const pqBytes = strUnHex(pq.asString());
+                        if (!pqBytes || pqBytes->size() != kPQSecretKeySize)
+                            return std::nullopt;
+                        pqSecret.emplace(pqBytes->data(), pqBytes->size());
+                    }
+
                     return ValidatorToken{
-                        .manifest = m.asString(), .validationSecret = makeSlice(*key)};
+                        .manifest = m.asString(),
+                        .validationSecret = makeSlice(*key),
+                        .pqValidationSecret = std::move(pqSecret)};
                 }
             }
         }
@@ -315,6 +439,30 @@ ManifestCache::getSigningKey(PublicKey const& pk) const
         return iter->second.signingKey;
 
     return pk;
+}
+
+std::optional<Buffer>
+ManifestCache::getQuantumSigningKey(PublicKey const& pk) const
+{
+    std::shared_lock const lock{mutex_};
+    auto const iter = map_.find(pk);
+
+    if (iter != map_.end() && !iter->second.revoked())
+        return iter->second.quantumSigningKey;
+
+    return std::nullopt;
+}
+
+std::optional<Buffer>
+ManifestCache::getQuantumMasterKey(PublicKey const& pk) const
+{
+    std::shared_lock const lock{mutex_};
+    auto const iter = map_.find(pk);
+
+    if (iter != map_.end() && !iter->second.revoked())
+        return iter->second.quantumMasterKey;
+
+    return std::nullopt;
 }
 
 PublicKey
@@ -399,6 +547,21 @@ ManifestCache::applyManifest(Manifest m)
             if (auto stream = j_.debug())
                 logMftAct(stream, "Stale", m.masterKey, m.sequence, iter->second.sequence);
             return ManifestDisposition::Stale;
+        }
+
+        // PQ continuity: once a master key has published a hybrid manifest,
+        // every later non-revocation manifest must carry the same PQ master
+        // key. Manifest::verify only checks the PQ signatures the new manifest
+        // itself declares, so without this rule an attacker who recovered the
+        // ECC master secret could publish a higher-sequence ECC-only (or
+        // re-keyed) manifest and silently strip the validator's PQ layer.
+        // Revocations are exempt: they neuter the key entirely.
+        if (iter != map_.end() && !m.revoked() && iter->second.quantumMasterKey &&
+            (!m.quantumMasterKey || !(*m.quantumMasterKey == *iter->second.quantumMasterKey)))
+        {
+            if (auto stream = j_.warn())
+                logMftAct(stream, "PQDowngrade", m.masterKey, m.sequence, iter->second.sequence);
+            return ManifestDisposition::Invalid;
         }
 
         if (checkSignature && !m.verify())

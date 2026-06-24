@@ -33,6 +33,7 @@
 #include <xrpl/protocol/Issue.h>
 #include <xrpl/protocol/LedgerFormats.h>
 #include <xrpl/protocol/MPTIssue.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/RPCErr.h>
 #include <xrpl/protocol/SField.h>
@@ -76,6 +77,10 @@ private:
     std::optional<PublicKey> multiSignPublicKey_;
     Buffer multiSignature_;
     std::optional<std::reference_wrapper<SField const>> signatureTarget_;
+    // Hybrid multi-sign: populated when the request includes a PQ seed.
+    // pqPublicKey_ remains empty for ECC-only multi-signing.
+    Buffer pqPublicKey_;
+    Buffer pqSignature_;
 
 public:
     explicit SigningForParams() : multiSigningAcctID_(nullptr)
@@ -158,6 +163,30 @@ public:
     moveMultiSignature(Buffer&& multiSignature)
     {
         multiSignature_ = std::move(multiSignature);
+    }
+
+    [[nodiscard]] Buffer const&
+    getPqPublicKey() const
+    {
+        return pqPublicKey_;
+    }
+
+    [[nodiscard]] Buffer const&
+    getPqSignature() const
+    {
+        return pqSignature_;
+    }
+
+    void
+    setPqPublicKey(Slice pqPub)
+    {
+        pqPublicKey_ = Buffer(pqPub.data(), pqPub.size());
+    }
+
+    void
+    movePqSignature(Buffer&& pqSignature)
+    {
+        pqSignature_ = std::move(pqSignature);
     }
 };
 
@@ -472,6 +501,25 @@ transactionPreProcessImpl(
     PublicKey const& pk = keyPair->first;
     SecretKey const& sk = keyPair->second;
 
+    // Hybrid signing: when pq_seed_hex is set, regenerate the ML-DSA-44
+    // ephemeral keypair deterministically from the 32-byte hex seed and
+    // sign both ECC and PQ over the same payload.
+    Buffer pqPubBuf;
+    Buffer pqSecBuf;
+    if (params.isMember(jss::pq_seed_hex))
+    {
+        if (!params[jss::pq_seed_hex].isString())
+            return RPC::expectedFieldError(jss::pq_seed_hex, "string");
+        auto const pqSeed = strUnHex(params[jss::pq_seed_hex].asString());
+        if (!pqSeed || pqSeed->size() != kPQSeedSize)
+            return RPC::makeError(RpcInvalidParams, "pq_seed_hex must be 32 bytes (64 hex chars)");
+        auto [pub, sec] = pqKeypair(makeSlice(*pqSeed));
+        pqPubBuf = std::move(pub);
+        pqSecBuf = std::move(sec);
+    }
+    Slice const pqPub{pqPubBuf.data(), pqPubBuf.size()};
+    Slice const pqSec{pqSecBuf.data(), pqSecBuf.size()};
+
     bool const verify = !(params.isMember(jss::offline) && params[jss::offline].asBool());
 
     auto const signatureTarget =
@@ -494,6 +542,13 @@ transactionPreProcessImpl(
         }
         signingArgs.setSignatureTarget(signatureTarget);
     }
+
+    // PQ signing into an inner signature target is not supported: STTx::sign
+    // treats the combination as a logic error and terminates. Reject it at
+    // the RPC boundary so callers get a parameter error instead.
+    if (signatureTarget && !pqPubBuf.empty())
+        return RPC::makeError(
+            RpcInvalidParams, "pq_seed_hex cannot be combined with signature_target");
 
     if (!params.isMember(jss::tx_json))
         return RPC::missingFieldError(jss::tx_json);
@@ -687,15 +742,23 @@ transactionPreProcessImpl(
     // If multisign then return multiSignature, else set TxnSignature field.
     if (signingArgs.isMultiSigning())
     {
-        Serializer const s = buildMultiSigningData(*stTx, signingArgs.getSigner());
+        Serializer const s = pqPub.empty()
+            ? buildMultiSigningData(*stTx, signingArgs.getSigner())
+            : buildMultiSigningData(*stTx, signingArgs.getSigner(), pqPub);
 
         auto multisig = xrpl::sign(pk, sk, s.slice());
 
         signingArgs.moveMultiSignature(std::move(multisig));
+
+        if (!pqPub.empty())
+        {
+            signingArgs.setPqPublicKey(pqPub);
+            signingArgs.movePqSignature(xrpl::pqSign(pqSec, s.slice()));
+        }
     }
     else if (signingArgs.isSingleSigning())
     {
-        stTx->sign(pk, sk, signatureTarget);
+        stTx->sign(pk, sk, signatureTarget, pqPub, pqSec);
     }
 
     return TransactionPreProcessResult{std::move(stTx)};
@@ -1241,6 +1304,14 @@ transactionSignFor(
         signer.setFieldVL(sfTxnSignature, signForParams.getSignature());
         signer.setFieldVL(sfSigningPubKey, signForParams.getPublicKey().slice());
 
+        // Hybrid multi-sign: emit the PQ pair on the Signer when present.
+        if (auto const& pqPub = signForParams.getPqPublicKey(); !pqPub.empty())
+        {
+            signer.setFieldVL(sfQuantumPubKey, Slice(pqPub.data(), pqPub.size()));
+            auto const& pqSig = signForParams.getPqSignature();
+            signer.setFieldVL(sfQuantumSignature, Slice(pqSig.data(), pqSig.size()));
+        }
+
         STObject& sigTarget = [&]() -> STObject& {
             auto const target = signForParams.getSignatureTarget();
             if (target)
@@ -1411,13 +1482,18 @@ transactionSubmitMultiSigned(
     if (signers.empty())
         return RPC::makeParamError("tx_json.Signers array may not be empty.");
 
-    // The Signers array may only contain Signer objects.
-    if (std::ranges::find_if_not(signers, [](STObject const& obj) {
+    // The Signers array may only contain Signer objects.  After applyTemplate
+    // each entry's getCount() equals the sfSigner inner-object template size,
+    // including non-present optional fields (e.g., the hybrid-signing
+    // sfQuantumPubKey / sfQuantumSignature pair), so this count is sourced
+    // from the template rather than hard-coded.
+    auto const* const signerTemplate =
+        InnerObjectFormats::getInstance().findSOTemplateBySField(sfSigner);
+    int const signerFieldCount = signerTemplate ? static_cast<int>(signerTemplate->size()) : 0;
+    if (std::ranges::find_if_not(signers, [signerFieldCount](STObject const& obj) {
             return (
-                // A Signer object always contains these fields and no
-                // others.
                 obj.isFieldPresent(sfAccount) && obj.isFieldPresent(sfSigningPubKey) &&
-                obj.isFieldPresent(sfTxnSignature) && obj.getCount() == 3);
+                obj.isFieldPresent(sfTxnSignature) && obj.getCount() == signerFieldCount);
         }) != signers.end())
     {
         return RPC::makeParamError("Signers array may only contain Signer entries.");

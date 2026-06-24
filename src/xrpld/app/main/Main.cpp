@@ -1,4 +1,5 @@
 #include <xrpld/app/main/Application.h>
+#include <xrpld/app/main/HybridValidatorTokenGen.h>
 #include <xrpld/core/Config.h>
 #include <xrpld/core/ConfigSections.h>
 #include <xrpld/core/TimeKeeper.h>
@@ -7,7 +8,10 @@
 
 #include <xrpl/basics/Log.h>
 #include <xrpl/basics/SlabAllocator.h>
+#include <xrpl/basics/Slice.h>
+#include <xrpl/basics/StringUtilities.h>
 #include <xrpl/basics/base_uint.h>
+#include <xrpl/basics/strHex.h>
 #include <xrpl/beast/core/CurrentThreadName.h>
 #include <xrpl/beast/net/IPEndpoint.h>
 #include <xrpl/beast/unit_test/suite_info.h>
@@ -16,7 +20,10 @@
 #include <xrpl/git/Git.h>
 #include <xrpl/json/json_writer.h>
 #include <xrpl/protocol/BuildInfo.h>
+#include <xrpl/protocol/PQSign.h>
+#include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/SystemParameters.h>
+#include <xrpl/protocol/tokens.h>
 #include <xrpl/server/Vacuum.h>
 
 #include <boost/algorithm/string/classification.hpp>
@@ -383,7 +390,25 @@ run(int argc, char** argv)
         "force_ledger_present_range",
         po::value<std::string>(),
         "Specify the range of present ledgers for testing purposes. Min and "
-        "max values are comma separated.")("version", "Display the build version.");
+        "max values are comma separated.")("version", "Display the build version.")(
+        "generate-hybrid-validator-token",
+        "Generate a hybrid (ECC + ML-DSA-44) validator token. Outputs the "
+        "base64-encoded [validator_token] payload on stdout and the master "
+        "identities to stderr. Optional inputs --master-ecc-seed (base58), "
+        "--master-pq-seed-hex (32-byte hex), --domain, --sequence.")(
+        "master-ecc-seed",
+        po::value<std::string>(),
+        "Optional base58 master ECC seed for --generate-hybrid-validator-token.")(
+        "master-pq-seed-hex",
+        po::value<std::string>(),
+        "Optional 32-byte hex master PQ seed for "
+        "--generate-hybrid-validator-token.")(
+        "domain",
+        po::value<std::string>(),
+        "Optional domain for --generate-hybrid-validator-token.")(
+        "sequence",
+        po::value<std::uint32_t>(),
+        "Optional manifest sequence for --generate-hybrid-validator-token (default 1).");
 
     po::options_description data("Ledger/Data Options");
     data.add_options()("import", importText.c_str())(
@@ -518,6 +543,64 @@ run(int argc, char** argv)
         // LCOV_EXCL_START
         std::cout << json::FastWriter().write(getServerDefinitionsJson());
         return 0;
+        // LCOV_EXCL_STOP
+    }
+
+    if (vm.contains("generate-hybrid-validator-token"))
+    {
+        // LCOV_EXCL_START
+        xrpl::detail::HybridTokenInputs inputs;
+        if (vm.contains("master-ecc-seed"))
+        {
+            auto const seed = parseBase58<Seed>(vm["master-ecc-seed"].as<std::string>());
+            if (!seed)
+            {
+                std::cerr << "Invalid --master-ecc-seed (expecting base58)\n";
+                return 1;
+            }
+            inputs.masterEccSeed = *seed;
+        }
+        if (vm.contains("master-pq-seed-hex"))
+        {
+            auto const bytes = strUnHex(vm["master-pq-seed-hex"].as<std::string>());
+            if (!bytes || bytes->size() != kPQSeedSize)
+            {
+                std::cerr << "Invalid --master-pq-seed-hex (expecting 32-byte hex)\n";
+                return 1;
+            }
+            inputs.masterPqSeed = Buffer(bytes->data(), bytes->size());
+        }
+        if (vm.contains("domain"))
+            inputs.domain = vm["domain"].as<std::string>();
+        if (vm.contains("sequence"))
+            inputs.sequence = vm["sequence"].as<std::uint32_t>();
+
+        try
+        {
+            auto const out = xrpl::detail::generateHybridValidatorToken(inputs);
+
+            std::cerr << "# Hybrid validator token generated.\n"
+                      << "# Master ECC public key: "
+                      << toBase58(TokenType::NodePublic, out.masterEccPubKey) << "\n"
+                      << "# Master ECC seed (base58): " << toBase58(out.masterEccSeed) << "\n"
+                      << "# Master PQ public key (hex): " << strHex(Slice(out.masterPqPubKey))
+                      << "\n"
+                      << "# Master PQ seed (hex): " << strHex(Slice(out.masterPqSeed)) << "\n"
+                      << "# Ephemeral ECC public key: "
+                      << toBase58(TokenType::NodePublic, out.ephemeralEccPubKey) << "\n"
+                      << "# Ephemeral PQ public key (hex): " << strHex(Slice(out.ephemeralPqPubKey))
+                      << "\n"
+                      << "#\n"
+                      << "# Paste the lines below under [validator_token] in "
+                         "xrpld.cfg:\n";
+            std::cout << out.validatorTokenBase64 << "\n";
+            return 0;
+        }
+        catch (std::exception const& ex)
+        {
+            std::cerr << "Token generation failed: " << ex.what() << "\n";
+            return 1;
+        }
         // LCOV_EXCL_STOP
     }
 

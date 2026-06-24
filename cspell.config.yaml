@@ -1,6 +1,7 @@
 ignorePaths:
   - build/**
   - src/libxrpl/crypto
+  - src/tests/libxrpl/crypto/fixtures/**
   - CMakeUserPresets.json
   - Doxyfile
   - docs/**/*.puml
@@ -61,6 +62,9 @@ words:
   - bindir
   - bookdir
   - Bougalis
+  - pqpubkey
+  - pqsignature
+  - pqwallet
   - Britto
   - Btrfs
   - Buildx
@@ -100,6 +104,7 @@ words:
   - desync
   - desynced
   - determ
+  - dilithium
   - disablerepo
   - distro
   - doxyfile
@@ -134,10 +139,12 @@ words:
   - iou
   - ious
   - isrdc
+  - isinstance
   - itype
   - jemalloc
   - jlog
   - jtnofill
+  - keccak
   - keylet
   - keylets
   - keyvadb
@@ -161,6 +168,7 @@ words:
   - mathbunnyru
   - mcmodel
   - MEMORYSTATUSEX
+  - mldsa
   - MPTAMM
   - MPTDEX
   - Merkle
@@ -188,6 +196,7 @@ words:
   - nftoffer
   - nftoken
   - nftokenid
+  - nohup
   - nftokenpages
   - nftokens
   - nftpage
@@ -226,6 +235,7 @@ words:
   - protobuf
   - protos
   - ptrs
+  - pycache
   - pushd
   - pyenv
   - pyparsing
@@ -239,6 +249,7 @@ words:
   - ripdtop
   - rippleci
   - rippled
+  - Ryzen
   - ripplerpc
   - rippletest
   - RLUSD

@@ -117,6 +117,23 @@ public:
     jobFinish(JobType const type, microseconds dur, int instance) = 0;
 
     /**
+     * Log a generic timed event (tag + duration).
+     *
+     * Used by the in-process verification probes (BenchProbe). The default
+     * implementation discards the event so subclasses and test doubles need
+     * not implement it.
+     *
+     * @param tag Event identifier
+     * @param dur Measured duration in microseconds
+     */
+    virtual void
+    event(std::string const& tag, microseconds dur)
+    {
+        (void)tag;
+        (void)dur;
+    }
+
+    /**
      * Render performance counters in Json
      *
      * @return Counters Json object

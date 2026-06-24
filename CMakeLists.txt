@@ -81,6 +81,7 @@ if(only_docs)
 endif()
 
 include(deps/Boost)
+include(deps/MldsaNative)
 
 add_subdirectory(external/antithesis-sdk)
 find_package(date REQUIRED)
@@ -136,6 +137,8 @@ include(XrplProtocolAutogen)
 include(XrplInstall)
 include(XrplPackaging)
 include(XrplValidatorKeys)
+include(XrplPqWalletCli)
+include(XrplBench)
 
 if(tests)
     include(CTest)

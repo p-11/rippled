@@ -199,6 +199,13 @@ RCLConsensus::Adaptor::share(RCLCxPeerPos const& peerPos)
     auto const sig = peerPos.signature();
     prop.set_signature(sig.data(), sig.size());
 
+    if (auto const pqPub = peerPos.pqPublicKey(); !pqPub.empty())
+    {
+        prop.set_pqpubkey(pqPub.data(), pqPub.size());
+        auto const pqSig = peerPos.pqSignature();
+        prop.set_pqsignature(pqSig.data(), pqSig.size());
+    }
+
     app_.getOverlay().relay(prop, peerPos.suppressionID(), peerPos.publicKey());
 }
 
@@ -251,13 +258,28 @@ RCLConsensus::Adaptor::propose(RCLCxPeerPos::Proposal const& proposal)
 
     prop.set_signature(sig.data(), sig.size());
 
+    Slice pqPubSlice{};
+    Slice pqSigSlice{};
+    Buffer pqSig;
+    if (keys.pqPublicKey && keys.pqSecretKey)
+    {
+        auto const& h = proposal.signingHash();
+        pqSig = xrpl::pqSign(Slice(*keys.pqSecretKey), Slice{h.data(), h.size()});
+        pqPubSlice = Slice(*keys.pqPublicKey);
+        pqSigSlice = Slice(pqSig);
+        prop.set_pqpubkey(pqPubSlice.data(), pqPubSlice.size());
+        prop.set_pqsignature(pqSigSlice.data(), pqSigSlice.size());
+    }
+
     auto const suppression = proposalUniqueId(
         proposal.position(),
         proposal.prevLedger(),
         proposal.proposeSeq(),
         proposal.closeTime(),
-        keys.publicKey,
-        sig);
+        keys.publicKey.slice(),
+        Slice{sig.data(), sig.size()},
+        pqPubSlice,
+        pqSigSlice);
 
     app_.getHashRouter().addSuppression(suppression);
 
@@ -819,6 +841,9 @@ RCLConsensus::Adaptor::validate(RCLCxLedger const& ledger, RCLTxSet const& txns,
 
     auto const& keys = *validatorKeys_.keys;
 
+    Slice const pqPub = keys.pqPublicKey ? Slice(*keys.pqPublicKey) : Slice{};
+    Slice const pqSec = keys.pqSecretKey ? Slice(*keys.pqSecretKey) : Slice{};
+
     auto v = std::make_shared<STValidation>(
         lastValidationTime_,
         keys.publicKey,
@@ -869,7 +894,9 @@ RCLConsensus::Adaptor::validate(RCLCxLedger const& ledger, RCLTxSet const& txns,
                 if (!amendments.empty())
                     v.setFieldV256(sfAmendments, STVector256(sfAmendments, amendments));
             }
-        });
+        },
+        pqPub,
+        pqSec);
 
     auto const serialized = v->getSerialized();
 

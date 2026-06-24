@@ -68,6 +68,8 @@ JSS(Paths);                       // in/out: TransactionSign
 JSS(PriceDataSeries);             // field.
 JSS(PriceData);                   // field.
 JSS(Provider);                    // field.
+JSS(QuantumPubKey);               // field: hybrid PQ signing pubkey.
+JSS(QuantumSignature);            // field: hybrid PQ signature.
 JSS(QuoteAsset);                  // in: Oracle.
 JSS(RawTransaction);              // in: Batch
 JSS(RawTransactions);             // in: Batch
@@ -480,9 +482,13 @@ JSS(pseudo_account);              // out: AccountInfo
 JSS(pubkey_node);                 // out: NetworkOPs
 JSS(pubkey_publisher);            // out: ValidatorList
 JSS(pubkey_validator);            // out: NetworkOPs, ValidatorList
+JSS(pq_ephemeral_key);            // out: Manifest (hex)
+JSS(pq_master_key);               // out: Manifest (hex)
+JSS(pq_seed_hex);                 // in: Sign, SignFor; out: WalletPropose
 JSS(public_key);                  // out: OverlayImpl, PeerImp, WalletPropose, ValidatorInfo
                                   // in/out: Manifest
 JSS(public_key_hex);              // out: WalletPropose
+JSS(secret_key_hex);              // out: WalletPropose
 JSS(published_ledger);            // out: NetworkOPs
 JSS(publisher_lists);             // out: ValidatorList
 JSS(quality);                     // out: NetworkOPs

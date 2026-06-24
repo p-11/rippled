@@ -4,6 +4,7 @@
 
 #include <xrpld/rpc/detail/Handler.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/random.h>
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/beast/utility/Journal.h>
@@ -1012,10 +1013,61 @@ public:
         }
     }
 
+    // A running PerfLog installs the global probe sink, so a BenchProbe scope
+    // routes its measured duration through PerfLog::event into the log file.
+    // Verify the wiring end to end: the buffered event is flushed on stop and
+    // its tag plus duration appear in the file.
+    void
+    testEvent()
+    {
+        testcase("Event probe");
+        using namespace boost::filesystem;
+
+        Fixture fixture{env_.app(), j_};
+        remove_all(fixture.logDir());
+
+        {
+            auto perfLog{fixture.perfLog(WithFile::Yes)};
+            perfLog->start();
+
+            {
+                BenchProbe probe{"unittest.probe"};
+            }
+
+            // Direct call path too: an event with an empty perf path is a
+            // no-op, but here the file is set so it must be recorded.
+            perfLog->event("unittest.direct", std::chrono::microseconds{1234});
+
+            perfLog->stop();
+        }
+
+        // The sink is detached once the PerfLog stops; a later probe must not
+        // crash or be attributed anywhere.
+        {
+            BenchProbe probe{"unittest.after_stop"};
+        }
+
+        bool sawProbe = false;
+        bool sawDirect = false;
+        std::ifstream logStream(fixture.logFile().c_str());
+        for (std::string line; std::getline(logStream, line);)
+        {
+            if (line.find("unittest.probe") != std::string::npos)
+                sawProbe = true;
+            if (line.find("unittest.direct") != std::string::npos &&
+                line.find("\"duration_us\":1234") != std::string::npos)
+                sawDirect = true;
+        }
+        BEAST_EXPECT(sawProbe);
+        BEAST_EXPECT(sawDirect);
+        BEAST_EXPECT(getProbeSink() == nullptr);
+    }
+
     void
     run() override
     {
         testFileCreation();
+        testEvent();
         testRPC(WithFile::No);
         testRPC(WithFile::Yes);
         testJobs(WithFile::No);

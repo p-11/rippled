@@ -23,7 +23,9 @@ enum class TokenType : std::uint8_t {
     AccountPublic = 35,
     AccountSecret = 34,
     FamilyGenerator = 41,  // unused
-    FamilySeed = 33
+    FamilySeed = 33,
+    DilithiumPublic = 36,
+    DilithiumPrivate = 37,
 };
 
 template <class T>

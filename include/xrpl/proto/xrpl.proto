@@ -149,6 +149,11 @@ message TMProposeSet {
 
   // Number of hops traveled
   optional uint32 hops = 12 [deprecated = true];
+
+  // featureQuantum: ML-DSA-44 ephemeral pubkey and signature; both must
+  // be present together when this is a hybrid proposal.
+  optional bytes pqPubKey = 13;
+  optional bytes pqSignature = 14;
 }
 
 enum TxSetStatus {

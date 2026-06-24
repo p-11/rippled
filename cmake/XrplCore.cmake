@@ -61,6 +61,7 @@ target_link_libraries(
         date::date
         ed25519::ed25519
         LibArchive::LibArchive
+        Mldsa::native
         OpenSSL::Crypto
         Xrpl::boost
         Xrpl::libs

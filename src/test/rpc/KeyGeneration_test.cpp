@@ -3,12 +3,16 @@
 #include <xrpld/rpc/detail/RPCHelpers.h>
 #include <xrpld/rpc/handlers/admin/keygen/WalletPropose.h>
 
+#include <xrpl/basics/Slice.h>
+#include <xrpl/basics/strHex.h>
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/json/json_writer.h>
 #include <xrpl/protocol/AccountID.h>
 #include <xrpl/protocol/ErrorCodes.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
+#include <xrpl/protocol/Seed.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/protocol/tokens.h>
 
@@ -779,6 +783,87 @@ public:
     }
 
     void
+    testDilithiumWallet()
+    {
+        testcase("dilithium");
+
+        // PQ keypair size constants on the wire (hex-encoded):
+        // - 1312-byte pubkey  → 2624 hex chars
+        // - 2560-byte secret  → 5120 hex chars
+        // - 32-byte PQ seed   →   64 hex chars
+        constexpr std::size_t kPqPubHex = 1312 * 2;
+        constexpr std::size_t kPqSecHex = 2560 * 2;
+        constexpr std::size_t kPqSeedHex = 32 * 2;
+
+        // From-passphrase: full response shape and determinism.
+        {
+            json::Value params;
+            params[jss::key_type] = "dilithium";
+            params[jss::passphrase] = "masterpassphrase";
+
+            auto result = walletPropose(params);
+            BEAST_EXPECT(!containsError(result));
+            BEAST_EXPECT(result[jss::key_type].asString() == "dilithium");
+            BEAST_EXPECT(result.isMember(jss::master_seed));
+            BEAST_EXPECT(result.isMember(jss::master_seed_hex));
+            BEAST_EXPECT(result.isMember(jss::master_key));
+            BEAST_EXPECT(result.isMember(jss::pq_seed_hex));
+            BEAST_EXPECT(result.isMember(jss::public_key_hex));
+            BEAST_EXPECT(result.isMember(jss::secret_key_hex));
+            // PQ keys are not account keys.
+            BEAST_EXPECT(!result.isMember(jss::account_id));
+            BEAST_EXPECT(!result.isMember(jss::public_key));
+
+            BEAST_EXPECT(result[jss::pq_seed_hex].asString().size() == kPqSeedHex);
+            BEAST_EXPECT(result[jss::public_key_hex].asString().size() == kPqPubHex);
+            BEAST_EXPECT(result[jss::secret_key_hex].asString().size() == kPqSecHex);
+
+            // Same passphrase → same derived material.
+            auto const again = walletPropose(params);
+            BEAST_EXPECT(again[jss::pq_seed_hex].asString() == result[jss::pq_seed_hex].asString());
+            BEAST_EXPECT(
+                again[jss::public_key_hex].asString() == result[jss::public_key_hex].asString());
+            BEAST_EXPECT(
+                again[jss::secret_key_hex].asString() == result[jss::secret_key_hex].asString());
+        }
+
+        // No-input dilithium: fresh random seed each call.
+        {
+            json::Value params;
+            params[jss::key_type] = "dilithium";
+
+            auto const r1 = walletPropose(params);
+            auto const r2 = walletPropose(params);
+            BEAST_EXPECT(!containsError(r1));
+            BEAST_EXPECT(!containsError(r2));
+            BEAST_EXPECT(r1[jss::pq_seed_hex].asString() != r2[jss::pq_seed_hex].asString());
+        }
+    }
+
+    void
+    testPqSeedDerivationMatchesHelper()
+    {
+        testcase("wallet_propose pq_seed_hex matches pqSeedFromSeed");
+
+        // The custody CLI derives its ML-DSA seed via pqSeedFromSeed; pin
+        // the RPC output to the same helper so the two paths cannot drift
+        // and mint different PQ keypairs from the same master seed.
+        json::Value params;
+        params[jss::key_type] = "dilithium";
+        params[jss::passphrase] = "masterpassphrase";
+        auto const result = walletPropose(params);
+        BEAST_EXPECT(!containsError(result));
+
+        auto const seed = parseGenericSeed("masterpassphrase");
+        if (BEAST_EXPECT(seed))
+        {
+            auto const pqSeed = pqSeedFromSeed(*seed);
+            BEAST_EXPECT(
+                result[jss::pq_seed_hex].asString() == strHex(Slice(pqSeed.data(), pqSeed.size())));
+        }
+    }
+
+    void
     run() override
     {
         testKeyType(std::nullopt, kSecP256K1Strings);
@@ -793,6 +878,8 @@ public:
         testKeypairForSignature(std::string("secp256k1"), kStrongBrainStrings);
 
         testXrplLibEd25519();
+        testDilithiumWallet();
+        testPqSeedDerivationMatchesHelper();
 
         testKeypairForSignatureErrors();
     }

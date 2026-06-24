@@ -1,5 +1,6 @@
 #include <xrpl/protocol/STValidation.h>
 
+#include <xrpl/basics/BenchProbe.h>
 #include <xrpl/basics/Blob.h>
 #include <xrpl/basics/Slice.h>
 #include <xrpl/basics/base_uint.h>
@@ -7,6 +8,7 @@
 #include <xrpl/beast/utility/instrumentation.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/SOTemplate.h>
@@ -59,6 +61,9 @@ STValidation::validationFormat()
         {sfBaseFeeDrops,          SoeOptional},
         {sfReserveBaseDrops,      SoeOptional},
         {sfReserveIncrementDrops, SoeOptional},
+        // featureQuantum
+        {sfQuantumPubKey,         SoeOptional},
+        {sfQuantumSignature,      SoeOptional},
     };
     // clang-format on
 
@@ -100,15 +105,59 @@ STValidation::isValid() const noexcept
 {
     if (!valid_)
     {
-        XRPL_ASSERT(
-            publicKeyType(getSignerPublic()) == KeyType::Secp256k1,
-            "xrpl::STValidation::isValid : valid key type");
+        // verifyDigest is hardcoded to secp256k1; gate the call so a
+        // non-secp256k1-signed validation reaching this path is reported
+        // invalid instead of triggering a logic_error inside a noexcept
+        // context.
+        if (publicKeyType(getSignerPublic()) != KeyType::Secp256k1)
+        {
+            valid_ = false;
+            return false;
+        }
 
-        valid_ = verifyDigest(
+        // Tx-path parity ("Mismatched post-quantum signature fields"):
+        // sfQuantumSignature is excluded from the ECC signing hash
+        // (kNotSigning), so without this guard anyone could append junk PQ
+        // bytes to a captured validation, keep the ECC signature valid, and
+        // relay unlimited distinct-suppression variants of it.
+        bool const hasPQPub = isFieldPresent(sfQuantumPubKey);
+        bool const hasPQSig = isFieldPresent(sfQuantumSignature);
+        if (hasPQPub != hasPQSig)
+        {
+            valid_ = false;
+            return false;
+        }
+
+        BenchProbe probe{"validation.verify"};
+
+        // Serialize the signing payload once: the ECC digest is its
+        // SHA-512/256, and the PQ signature verifies over the same raw bytes.
+        // Signatures and the PQ pubkey are read zero-copy (operator[]) rather
+        // than getFieldVL, avoiding ~3.7 KiB of copies on this per-validation
+        // consensus path.
+        Serializer ss;
+        ss.add32(HashPrefix::Validation);
+        addWithoutSigningFields(ss);
+
+        bool ok = verifyDigest(
             getSignerPublic(),
-            getSigningHash(),
-            makeSlice(getFieldVL(sfSignature)),
+            ss.getSHA512Half(),
+            (*this)[sfSignature],
             (getFlags() & kVfFullyCanonicalSig) != 0u);
+
+        if (ok && hasPQPub)
+        {
+            try
+            {
+                ok = pqVerify((*this)[sfQuantumPubKey], ss.slice(), (*this)[sfQuantumSignature]);
+            }
+            catch (...)
+            {
+                ok = false;
+            }
+        }
+
+        valid_ = ok;
     }
 
     return valid_.value();

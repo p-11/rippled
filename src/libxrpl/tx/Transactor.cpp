@@ -28,6 +28,7 @@
 #include <xrpl/protocol/Rules.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STAmount.h>
+#include <xrpl/protocol/STBlob.h>
 #include <xrpl/protocol/STLedgerEntry.h>
 #include <xrpl/protocol/STTx.h>
 #include <xrpl/protocol/Serializer.h>  // IWYU pragma: keep
@@ -52,6 +53,43 @@
 #include <vector>
 
 namespace xrpl {
+
+namespace {
+
+// Read a VL field's bytes as a Slice without copying. Caller must have
+// already verified the field is present. Used on the per-tx PQ
+// authentication hot path so that we don't pay the ~1.3 KiB heap
+// allocation that STObject::getFieldVL() does per access.
+[[nodiscard]] inline Slice
+peekVL(STObject const& obj, SField const& field)
+{
+    auto const& blob = dynamic_cast<STBlob const&>(obj.peekAtField(field));
+    return Slice(blob.data(), blob.size());
+}
+
+// True if `obj` or any of its (possibly nested) signers carries a
+// post-quantum field. Mirrors every place a verifier reads PQ fields:
+// the transaction itself, its multi-signers (sfSigners), and its batch
+// signers (sfBatchSigners, which checkBatchSign verifies, including their
+// own nested sfSigners). Used by the preflight amendment gate so no PQ
+// material is verified before featureQuantum activates.
+[[nodiscard]] bool
+carriesQuantumField(STObject const& obj)
+{
+    if (obj.isFieldPresent(sfQuantumPubKey) || obj.isFieldPresent(sfQuantumSignature))
+        return true;
+    if (obj.isFieldPresent(sfSigners))
+        for (auto const& sub : obj.getFieldArray(sfSigners))
+            if (carriesQuantumField(sub))
+                return true;
+    if (obj.isFieldPresent(sfBatchSigners))
+        for (auto const& sub : obj.getFieldArray(sfBatchSigners))
+            if (carriesQuantumField(sub))
+                return true;
+    return false;
+}
+
+}  // namespace
 
 /** Performs early sanity checks on the txid */
 NotTEC
@@ -199,6 +237,15 @@ Transactor::preflight1(PreflightContext const& ctx, std::uint32_t flagMask)
 
     if (auto const ret = detail::preflightCheckSigningKey(ctx.tx, ctx.j))
         return ret;
+
+    // Amendment gate for the hybrid-signature fields. STTx::checkSign
+    // verifies PQ material unconditionally (signature validity cannot depend
+    // on ledger state), so without this preflight rejection the new fields
+    // would change transaction validity before featureQuantum activates.
+    // carriesQuantumField covers the tx, its multi-signers, and its batch
+    // signers — every place checkSign / checkBatchSign reads PQ fields.
+    if (!ctx.rules.enabled(featureQuantum) && carriesQuantumField(ctx.tx))
+        return temDISABLED;
 
     // An AccountTxnID field constrains transaction ordering more than the
     // Sequence field.  Tickets, on the other hand, reduce ordering
@@ -729,7 +776,7 @@ Transactor::checkSign(
     if (!sleAccount)
         return terNO_ACCOUNT;
 
-    return checkSingleSign(view, idSigner, idAccount, sleAccount, j);
+    return checkSingleSign(view, idSigner, idAccount, sleAccount, sigObject, j);
 }
 
 NotTEC
@@ -737,6 +784,27 @@ Transactor::checkSign(PreclaimContext const& ctx)
 {
     auto const idAccount = ctx.tx.isFieldPresent(sfDelegate) ? ctx.tx.getAccountID(sfDelegate)
                                                              : ctx.tx.getAccountID(sfAccount);
+
+    // Quantum: under delegation, the signing check below consults the
+    // delegate's AccountRoot. That would silently bypass the source
+    // account's PQ opt-in. Require the delegate to also be opted in
+    // when the source is, so the opt-in propagates through delegation.
+    if (ctx.tx.isFieldPresent(sfDelegate) && ctx.view.rules().enabled(featureQuantum))
+    {
+        auto const sourceId = ctx.tx.getAccountID(sfAccount);
+        auto const sleSource = ctx.view.read(keylet::account(sourceId));
+        if (sleSource && sleSource->isFieldPresent(sfQuantumPubKey))
+        {
+            auto const sleDelegate = ctx.view.read(keylet::account(idAccount));
+            if (!sleDelegate || !sleDelegate->isFieldPresent(sfQuantumPubKey))
+            {
+                JLOG(ctx.j.trace())
+                    << "checkSign: delegate must be quantum opted in when source is.";
+                return tefBAD_AUTH;
+            }
+        }
+    }
+
     return checkSign(ctx.view, ctx.flags, ctx.parentBatchId, idAccount, ctx.tx, ctx.j);
 }
 
@@ -776,7 +844,7 @@ Transactor::checkBatchSign(PreclaimContext const& ctx)
                 return tesSUCCESS;
             }
 
-            if (ret = checkSingleSign(ctx.view, idSigner, idAccount, sleAccount, ctx.j);
+            if (ret = checkSingleSign(ctx.view, idSigner, idAccount, sleAccount, signer, ctx.j);
                 !isTesSuccess(ret))
                 return ret;
         }
@@ -790,30 +858,50 @@ Transactor::checkSingleSign(
     AccountID const& idSigner,
     AccountID const& idAccount,
     std::shared_ptr<SLE const> sleAccount,
+    STObject const& sigObject,
     beast::Journal const j)
 {
     bool const isMasterDisabled = sleAccount->isFlag(lsfDisableMaster);
 
-    // Signed with regular key.
-    if ((*sleAccount)[~sfRegularKey] == idSigner)
+    auto const authorize = [&]() -> NotTEC {
+        // Signed with regular key.
+        if ((*sleAccount)[~sfRegularKey] == idSigner)
+            return tesSUCCESS;
+
+        // Signed with enabled master key.
+        if (!isMasterDisabled && idAccount == idSigner)
+            return tesSUCCESS;
+
+        // Signed with disabled master key.
+        if (isMasterDisabled && idAccount == idSigner)
+            return tefMASTER_DISABLED;
+
+        // Signed with any other key.
+        return tefBAD_AUTH;
+    };
+
+    if (NotTEC const result = authorize(); !isTesSuccess(result))
+        return result;
+
+    // Quantum: when the source account has registered a post-quantum
+    // public key, the transaction must carry the matching value as its
+    // signing pubkey. Cryptographic verify of the PQ signature is
+    // already enforced in libxrpl; this is the authentication layer.
+    if (view.rules().enabled(featureQuantum) && sleAccount->isFieldPresent(sfQuantumPubKey))
     {
-        return tesSUCCESS;
+        if (!sigObject.isFieldPresent(sfQuantumPubKey))
+        {
+            JLOG(j.trace()) << "checkSingleSign: account requires a quantum signature.";
+            return tefBAD_AUTH;
+        }
+        if (peekVL(sigObject, sfQuantumPubKey) != peekVL(*sleAccount, sfQuantumPubKey))
+        {
+            JLOG(j.trace()) << "checkSingleSign: quantum public key mismatch.";
+            return tefBAD_AUTH;
+        }
     }
 
-    // Signed with enabled master key.
-    if (!isMasterDisabled && idAccount == idSigner)
-    {
-        return tesSUCCESS;
-    }
-
-    // Signed with disabled master key.
-    if (isMasterDisabled && idAccount == idSigner)
-    {
-        return tefMASTER_DISABLED;
-    }
-
-    // Signed with any other key.
-    return tefBAD_AUTH;
+    return tesSUCCESS;
 }
 
 NotTEC
@@ -831,6 +919,18 @@ Transactor::checkMultiSign(
     {
         JLOG(j.trace()) << "applyTransaction: Invalid: Not a multi-signing account.";
         return tefNOT_MULTI_SIGNING;
+    }
+
+    // Quantum: when the source account has registered a post-quantum
+    // pubkey, every signer must contribute hybrid signatures whose PQ
+    // pubkey equals either the signer's own AccountRoot value or the
+    // matching SignerEntry value.
+    bool const quantumEnabled = view.rules().enabled(featureQuantum);
+    bool sourceOptedIn = false;
+    if (quantumEnabled)
+    {
+        if (auto const sleSource = view.read(keylet::account(id)))
+            sourceOptedIn = sleSource->isFieldPresent(sfQuantumPubKey);
     }
 
     // We have plans to support multiple SignerLists in the future.  The
@@ -961,6 +1061,58 @@ Transactor::checkMultiSign(
                 return tefBAD_SIGNATURE;
             }
         }
+        // Quantum: authenticate the per-signer PQ pubkey against either
+        // the signer's AccountRoot or the matching SignerEntry. When the
+        // source is opted in, every signer must carry hybrid signatures.
+        // We compare STBlob references rather than copy each value into a
+        // Blob; per ML-DSA-44 pubkey that saves a ~1.3 KiB heap allocation
+        // per signer.
+        if (quantumEnabled)
+        {
+            bool const txSignerHasPQ = txSigner.isFieldPresent(sfQuantumPubKey);
+            if (sourceOptedIn && !txSignerHasPQ)
+            {
+                JLOG(j.trace()) << "checkMultiSign: signer missing quantum public key.";
+                return tefBAD_AUTH;
+            }
+            if (txSignerHasPQ)
+            {
+                auto const txPQ = peekVL(txSigner, sfQuantumPubKey);
+
+                std::optional<Slice> const regFromRoot =
+                    (sleTxSignerRoot && sleTxSignerRoot->isFieldPresent(sfQuantumPubKey))
+                    ? std::optional<Slice>{peekVL(*sleTxSignerRoot, sfQuantumPubKey)}
+                    : std::nullopt;
+                std::optional<Slice> const regFromEntry = iter->pqPub
+                    ? std::optional<Slice>{Slice(iter->pqPub->data(), iter->pqPub->size())}
+                    : std::nullopt;
+
+                if (regFromRoot && regFromEntry && *regFromRoot != *regFromEntry)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer AccountRoot and SignerEntry "
+                                       "quantum public keys disagree.";
+                    return tefBAD_AUTH;
+                }
+                if (regFromRoot && *regFromRoot != txPQ)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer AccountRoot quantum public "
+                                       "key mismatch.";
+                    return tefBAD_AUTH;
+                }
+                if (regFromEntry && *regFromEntry != txPQ)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: SignerEntry quantum public key mismatch.";
+                    return tefBAD_AUTH;
+                }
+                if (!regFromRoot && !regFromEntry && sourceOptedIn)
+                {
+                    JLOG(j.trace()) << "checkMultiSign: signer has no registered quantum "
+                                       "public key to authenticate against.";
+                    return tefBAD_AUTH;
+                }
+            }
+        }
+
         // The signer is legitimate.  Add their weight toward the quorum.
         weightSum += iter->weight;
     }

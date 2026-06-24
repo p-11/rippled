@@ -2,15 +2,19 @@
 
 #include <xrpld/consensus/ConsensusProposal.h>
 
+#include <xrpl/basics/Buffer.h>
+#include <xrpl/basics/Slice.h>
 #include <xrpl/basics/base_uint.h>
 #include <xrpl/beast/hash/hash_append.h>
 #include <xrpl/json/json_value.h>
 #include <xrpl/protocol/HashPrefix.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 
 #include <boost/container/static_vector.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace xrpl {
@@ -42,6 +46,22 @@ public:
         uint256 const& suppress,
         Proposal const& proposal);  // trivially copyable
 
+    /** Hybrid ctor: also carries the PQ ephemeral pubkey and PQ signature.
+
+        Use the non-hybrid ctor (or pass empty slices) for ECC-only
+        proposals. When `pqPublicKey` and `pqSignature` are both
+        non-empty, checkSign() additionally verifies the PQ signature
+        and proposalUniqueId() incorporates the PQ pair so two proposals
+        that differ only on the PQ side are not collapsed as duplicates.
+    */
+    RCLCxPeerPos(
+        PublicKey const& publicKey,
+        Slice const& signature,
+        Slice const& pqPublicKey,
+        Slice const& pqSignature,
+        uint256 const& suppress,
+        Proposal const& proposal);
+
     //! Verify the signing hash of the proposal
     bool
     checkSign() const;
@@ -51,6 +71,20 @@ public:
     signature() const
     {
         return {signature_.data(), signature_.size()};
+    }
+
+    //! Hybrid PQ ephemeral pubkey, empty Slice if ECC-only proposal
+    Slice
+    pqPublicKey() const
+    {
+        return pqPublicKey_ ? Slice(*pqPublicKey_) : Slice{};
+    }
+
+    //! Hybrid PQ signature, empty Slice if ECC-only proposal
+    Slice
+    pqSignature() const
+    {
+        return pqSignature_ ? Slice(*pqSignature_) : Slice{};
     }
 
     //! Public key of peer that sent the proposal
@@ -88,6 +122,11 @@ private:
     uint256 suppression_;
     Proposal proposal_;
     boost::container::static_vector<std::uint8_t, 72> signature_;
+    // Hybrid PQ pair, populated only when the proposal carries an
+    // ML-DSA-44 ephemeral pubkey + signature. Allocated indirectly via
+    // optional so the ECC-only path keeps the struct cheap to copy.
+    std::optional<Buffer> pqPublicKey_;
+    std::optional<Buffer> pqSignature_;
 
     template <class Hasher>
     void
@@ -101,6 +140,23 @@ private:
         hash_append(h, proposal().position());
     }
 };
+
+/** Calculate a unique identifier for a signed proposal.
+
+    Identical contract to the ECC-only overload but additionally
+    incorporates the PQ pubkey and PQ signature so two hybrid proposals
+    differing only on the PQ side hash to distinct suppression IDs.
+*/
+uint256
+proposalUniqueId(
+    uint256 const& proposeHash,
+    uint256 const& previousLedger,
+    std::uint32_t proposeSeq,
+    NetClock::time_point closeTime,
+    Slice const& publicKey,
+    Slice const& signature,
+    Slice const& pqPublicKey,
+    Slice const& pqSignature);
 
 /** Calculate a unique identifier for a signed proposal.
 

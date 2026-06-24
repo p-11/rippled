@@ -4,6 +4,7 @@
 #include <xrpl/beast/unit_test/suite.h>
 #include <xrpl/beast/xor_shift_engine.h>
 #include <xrpl/json/to_string.h>  // IWYU pragma: keep
+#include <xrpl/protocol/KeyType.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STValidation.h>
@@ -206,6 +207,9 @@ public:
             BEAST_EXPECT(strcmp(ex.what(), "Invalid public key in validation") == 0);
         }
 
+        // Ed25519 signing key: validations keep a secp256k1 envelope key
+        // (the ML-DSA material rides in the separate sfQuantum* fields), so
+        // a non-secp256k1 signing pubkey is rejected at deserialize time.
         try
         {
             SerialIter sit{kPayload4};
