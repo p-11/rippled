@@ -21,9 +21,6 @@ class EccCustodyMock
 public:
     explicit EccCustodyMock(std::filesystem::path stateFile);
 
-    [[nodiscard]] bool
-    exists() const;
-
     void
     initializeFromSeed(xrpl::Seed const& seed, xrpl::KeyType type);
 
@@ -33,9 +30,6 @@ public:
 
     [[nodiscard]] xrpl::PublicKey
     publicKey() const;
-
-    [[nodiscard]] xrpl::KeyType
-    keyType() const;
 
     // The blackbox sign request. Set RIPPLE_CUSTODY_FAIL=1 to make the
     // mock return an invalid signature, proving the server-side hybrid

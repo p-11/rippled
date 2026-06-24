@@ -12,7 +12,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace pqwallet::custody {
 
@@ -112,9 +111,8 @@ PqCustodyMock::signWithPq(xrpl::Slice payload) const
 
     if (pqFailRequested())
     {
-        std::vector<std::uint8_t> corrupted(sig.data(), sig.data() + sig.size());
-        corrupted[0] ^= 0xFFu;
-        return xrpl::Buffer(corrupted.data(), corrupted.size());
+        sig.data()[0] ^= 0xFFu;
+        return sig;
     }
     return sig;
 }

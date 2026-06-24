@@ -11,7 +11,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace pqwallet::custody {
 
@@ -32,12 +31,6 @@ custodyFailRequested()
 
 EccCustodyMock::EccCustodyMock(std::filesystem::path stateFile) : stateFile_(std::move(stateFile))
 {
-}
-
-bool
-EccCustodyMock::exists() const
-{
-    return std::filesystem::exists(stateFile_);
 }
 
 void
@@ -104,12 +97,6 @@ EccCustodyMock::publicKey() const
     return *publicKey_;
 }
 
-xrpl::KeyType
-EccCustodyMock::keyType() const
-{
-    return keyType_;
-}
-
 xrpl::Buffer
 EccCustodyMock::signWithECC(xrpl::Slice payload) const
 {
@@ -124,9 +111,8 @@ EccCustodyMock::signWithECC(xrpl::Slice payload) const
     {
         // Corrupt the first byte so the signature is no longer valid DER;
         // run-demo.sh uses this for its negative path.
-        std::vector<std::uint8_t> corrupted(sig.data(), sig.data() + sig.size());
-        corrupted[0] ^= 0xFFu;
-        return xrpl::Buffer(corrupted.data(), corrupted.size());
+        sig.data()[0] ^= 0xFFu;
+        return sig;
     }
     return sig;
 }
