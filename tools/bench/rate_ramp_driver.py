@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
@@ -188,11 +189,7 @@ def _wait_ready(url: str, ledgers: int = 5, timeout_s: float = 90.0) -> None:
 
 
 def pct(values: list, p: float) -> float:
-    if not values:
-        return float("nan")
-    s = sorted(values)
-    k = min(len(s) - 1, int(round(p / 100.0 * (len(s) - 1))))
-    return round(s[k], 1)
+    return round(bl.percentile(values, p), 1)
 
 
 def main() -> int:
@@ -390,8 +387,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    import sys
-
     try:
         sys.exit(main())
     except Exception as e:  # noqa: BLE001

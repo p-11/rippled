@@ -9,19 +9,15 @@ single Markdown report.
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import json
 import os
+import random
 import statistics
 import sys
 
-
-def percentile(values: list[float], p: float) -> float:
-    if not values:
-        return float("nan")
-    s = sorted(values)
-    k = min(len(s) - 1, int(round(p / 100.0 * (len(s) - 1))))
-    return s[k]
+from bench_lib import percentile
 
 
 def bootstrap_median_ci(
@@ -36,8 +32,6 @@ def bootstrap_median_ci(
     median is already tight at `cap`, so the result is unchanged to the
     reported precision.
     """
-    import random
-
     if len(values) < 2:
         return (float("nan"), float("nan"))
     rng = random.Random(seed)
@@ -78,8 +72,6 @@ def parse_perf_dir(perf_dir: str) -> dict[str, dict[str, list[float]]]:
 
 def parse_monitor(path: str) -> dict[str, dict[str, list[float]]]:
     """node -> {cpu_pct: [...], rss_mb: [...], job_backlog: [...]}."""
-    import csv
-
     out: dict[str, dict[str, list[float]]] = {}
     if not os.path.exists(path):
         return out
@@ -315,8 +307,6 @@ def main() -> int:
                 "throughput. Sustained throughput is the delivered (achieved) "
                 "tps, not the offered rate._"
             )
-        validated_key = "completed"
-
         disk_before = None
         if os.path.exists(disk_before_path):
             with open(disk_before_path, encoding="utf-8") as f:
@@ -355,7 +345,7 @@ def main() -> int:
                 da = json.load(f)
             if _healthy(da.get("sizes_bytes") or {}):
                 disk_after = da
-                validated_total = sum(lv[validated_key] for lv in cl_levels)
+                validated_total = sum(lv["completed"] for lv in cl_levels)
 
         if disk_before is not None:
             parts.append("\n## Ledger storage growth (on disk)\n")

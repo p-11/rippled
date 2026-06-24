@@ -18,6 +18,16 @@ GENESIS_SECRET = "masterpassphrase"
 ASF_QUANTUM = 18  # AccountSet flag from include/xrpl/protocol/TxFlags.h
 
 
+def percentile(values: list[float], p: float) -> float:
+    """Nearest-rank percentile (p in 0..100). Shared so the driver, the
+    aggregator, and the probes all report the same statistic."""
+    if not values:
+        return float("nan")
+    s = sorted(values)
+    k = min(len(s) - 1, int(round(p / 100.0 * (len(s) - 1))))
+    return s[k]
+
+
 class RpcError(RuntimeError):
     pass
 

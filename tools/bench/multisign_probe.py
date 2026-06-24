@@ -123,11 +123,7 @@ def run_level(
 
     durs = read_new_durations(perf_dir, offsets, PROBE_TAG)
     med = statistics.median(durs) if durs else float("nan")
-    p95 = (
-        sorted(durs)[min(len(durs) - 1, int(round(0.95 * (len(durs) - 1))))]
-        if durs
-        else float("nan")
-    )
+    p95 = bl.percentile(durs, 95)
     return {
         "N": n,
         "txs_submitted": submitted,
