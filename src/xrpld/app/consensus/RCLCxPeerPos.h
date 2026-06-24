@@ -77,14 +77,14 @@ public:
     Slice
     pqPublicKey() const
     {
-        return pqPublicKey_ ? Slice{pqPublicKey_->data(), pqPublicKey_->size()} : Slice{};
+        return pqPublicKey_ ? Slice(*pqPublicKey_) : Slice{};
     }
 
     //! Hybrid PQ signature, empty Slice if ECC-only proposal
     Slice
     pqSignature() const
     {
-        return pqSignature_ ? Slice{pqSignature_->data(), pqSignature_->size()} : Slice{};
+        return pqSignature_ ? Slice(*pqSignature_) : Slice{};
     }
 
     //! Public key of peer that sent the proposal

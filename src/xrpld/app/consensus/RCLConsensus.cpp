@@ -264,10 +264,9 @@ RCLConsensus::Adaptor::propose(RCLCxPeerPos::Proposal const& proposal)
     if (keys.pqPublicKey && keys.pqSecretKey)
     {
         auto const& h = proposal.signingHash();
-        pqSig = xrpl::pqSign(
-            Slice{keys.pqSecretKey->data(), keys.pqSecretKey->size()}, Slice{h.data(), h.size()});
-        pqPubSlice = Slice{keys.pqPublicKey->data(), keys.pqPublicKey->size()};
-        pqSigSlice = Slice{pqSig.data(), pqSig.size()};
+        pqSig = xrpl::pqSign(Slice(*keys.pqSecretKey), Slice{h.data(), h.size()});
+        pqPubSlice = Slice(*keys.pqPublicKey);
+        pqSigSlice = Slice(pqSig);
         prop.set_pqpubkey(pqPubSlice.data(), pqPubSlice.size());
         prop.set_pqsignature(pqSigSlice.data(), pqSigSlice.size());
     }
@@ -842,10 +841,8 @@ RCLConsensus::Adaptor::validate(RCLCxLedger const& ledger, RCLTxSet const& txns,
 
     auto const& keys = *validatorKeys_.keys;
 
-    Slice const pqPub =
-        keys.pqPublicKey ? Slice(keys.pqPublicKey->data(), keys.pqPublicKey->size()) : Slice{};
-    Slice const pqSec =
-        keys.pqSecretKey ? Slice(keys.pqSecretKey->data(), keys.pqSecretKey->size()) : Slice{};
+    Slice const pqPub = keys.pqPublicKey ? Slice(*keys.pqPublicKey) : Slice{};
+    Slice const pqSec = keys.pqSecretKey ? Slice(*keys.pqSecretKey) : Slice{};
 
     auto v = std::make_shared<STValidation>(
         lastValidationTime_,

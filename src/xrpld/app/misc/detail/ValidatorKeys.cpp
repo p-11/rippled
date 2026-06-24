@@ -53,14 +53,10 @@ ValidatorKeys::ValidatorKeys(Config const& config, beast::Journal j)
             // secret (a manifest/token hybrid-ness mismatch is rejected
             // separately below).
             Slice const probe{kPqProbe, sizeof(kPqProbe) - 1};
-            bool const pqSecretMatchesManifest =
-                manifestHybrid && tokenHybrid &&
-                pqVerify(
-                    Slice{m->quantumSigningKey->data(), m->quantumSigningKey->size()},
-                    probe,
-                    pqSign(
-                        Slice{token->pqValidationSecret->data(), token->pqValidationSecret->size()},
-                        probe));
+            bool const pqSecretMatchesManifest = manifestHybrid && tokenHybrid &&
+                pqVerify(Slice(*m->quantumSigningKey),
+                         probe,
+                         pqSign(Slice(*token->pqValidationSecret), probe));
 
             if (!m || pk != m->signingKey || (manifestHybrid != tokenHybrid))
             {

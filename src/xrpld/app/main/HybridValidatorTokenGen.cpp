@@ -94,7 +94,7 @@ generateHybridValidatorToken(HybridTokenInputs const& in)
     json::Value token(json::ValueType::Object);
     token["manifest"] = manifestB64;
     token["validation_secret_key"] = strHex(ephemeralEccSec);
-    token["pq_validation_secret_key"] = strHex(Slice(ephemeralPqSec.data(), ephemeralPqSec.size()));
+    token["pq_validation_secret_key"] = strHex(ephemeralPqSec);
 
     std::string const tokenJson = json::FastWriter().write(token);
     std::string const tokenB64 = base64Encode(tokenJson);

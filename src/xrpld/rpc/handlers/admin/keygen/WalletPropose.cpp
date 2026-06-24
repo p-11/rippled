@@ -132,6 +132,10 @@ walletPropose(json::Value const& params)
     auto const seedHex = strHex(*seed);
     auto const seedBase58 = toBase58(*seed);
 
+    obj[jss::master_seed] = seedBase58;
+    obj[jss::master_seed_hex] = seedHex;
+    obj[jss::master_key] = seed1751;
+
     if (*keyType == KeyType::Dilithium)
     {
         // The derivation rule lives in pqSeedFromSeed (shared with the
@@ -142,9 +146,6 @@ walletPropose(json::Value const& params)
         auto const pqSeedSlice = Slice(pqSeed.data(), pqSeed.size());
         auto const [pqPub, pqSec] = pqKeypair(pqSeedSlice);
 
-        obj[jss::master_seed] = seedBase58;
-        obj[jss::master_seed_hex] = seedHex;
-        obj[jss::master_key] = seed1751;
         obj[jss::pq_seed_hex] = strHex(pqSeedSlice);
         obj[jss::public_key_hex] = strHex(Slice(pqPub.data(), pqPub.size()));
         obj[jss::secret_key_hex] = strHex(Slice(pqSec.data(), pqSec.size()));
@@ -154,9 +155,6 @@ walletPropose(json::Value const& params)
     {
         auto const publicKey = generateKeyPair(*keyType, *seed).first;
 
-        obj[jss::master_seed] = seedBase58;
-        obj[jss::master_seed_hex] = seedHex;
-        obj[jss::master_key] = seed1751;
         obj[jss::account_id] = toBase58(calcAccountID(publicKey));
         obj[jss::public_key] = toBase58(TokenType::AccountPublic, publicKey);
         obj[jss::key_type] = to_string(*keyType);

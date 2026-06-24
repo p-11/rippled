@@ -45,7 +45,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <memory>
 #include <optional>

@@ -57,10 +57,7 @@ RCLCxPeerPos::checkSign() const
     if (pqPublicKey_)
     {
         auto const& h = proposal_.signingHash();
-        if (!pqVerify(
-                Slice{pqPublicKey_->data(), pqPublicKey_->size()},
-                Slice{h.data(), h.size()},
-                Slice{pqSignature_->data(), pqSignature_->size()}))
+        if (!pqVerify(Slice(*pqPublicKey_), Slice{h.data(), h.size()}, Slice(*pqSignature_)))
             return false;
     }
 
