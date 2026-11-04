@@ -4,8 +4,32 @@
 # Usage:
 #   tools/bench/run-suite.sh [--profile hybrid|amendment-off|upstream]
 #                            [--label NAME] [--smoke] [--avx2] [--multisign]
-#                            [--pool N]
+#                            [--method steady|ramp] [--pool N|auto]
 #                            [--rate-start N] [--rate-step N] [--rate-cap N]
+#                            [--rates R1,R2,...] [--rate-expected N]
+#                            [--ramp S] [--settle S] [--measure S] [--drain S]
+#                            [--max-interval S] [--fee DROPS] [--node-size SIZE]
+#                            [--gen-procs N] [--gen-threads N]
+#
+# --method steady (default) is the methodology from the RippleX review
+#   (Appendix A): xrpld's default transaction-queue settings, ramp to each load,
+#   hold it, score only a steady-state window, pass while every validated-ledger
+#   interval stays <= --max-interval (5 s), throughput read from the ledgers.
+#   --method ramp reproduces the Phase 2 rate-ramp driver unchanged.
+# --pool auto sizes the account pool so no account submits twice within one
+#   ledger at the top rate: rate_expected x max_interval x 1.25.
+# --rate-expected sizes the pre-signed corpus: every level up to it (plus two
+#   steps) is covered; a run that passes beyond it stops as generator-limited.
+#
+# Load generator placement (steady method):
+#   GEN_SSH=user@host  run the driver on another machine over ssh (python3 needed
+#                      there; tools/bench/*.py and the corpus are rsync'd over and
+#                      the raw outputs pulled back)
+#   NODE_HOST=IP       address of this DevNet host as seen by the generator
+#                      (default 127.0.0.1); RPC ports 5005-5007 (stock) and
+#                      5010-5014 (validators) must be reachable from it
+# Keep both hosts NTP-synced: the generator's timestamps are lined up with disk
+# snapshots taken here.
 #
 # --avx2 runs the whole node on the AVX2 ML-DSA backend (not just the microbench).
 # --multisign swaps the throughput ramp for the multi-sign per-signer verify probe
@@ -27,6 +51,21 @@ COMPOSE="${DEVNET_DIR}/docker-compose.yml"
 PROFILE="hybrid"
 LABEL=""
 POOL=1000
+POOL_SET=0
+METHOD="steady"
+RATES=""
+RAMP=30
+SETTLE=60
+MEASURE=120
+DRAIN=30
+MAX_INTERVAL=5
+GEN_PROCS=4
+GEN_THREADS=48
+STEADY_FEE=1000000 # high enough that open-ledger fee escalation does not bind; same for every config
+NODE_SIZE="${NODE_SIZE:-}"
+NODE_HOST="${NODE_HOST:-127.0.0.1}"
+GEN_SSH="${GEN_SSH:-}"
+GEN_DIR="${GEN_DIR:-/tmp/xrpl-bench-gen}"
 HOLD=12
 WARMUP=6
 SMOKE=0
@@ -101,6 +140,52 @@ while [[ $# -gt 0 ]]; do
             ;;
         --pool)
             POOL="$2"
+            POOL_SET=1
+            [[ "${POOL}" == "auto" ]] && POOL_SET=0 && POOL=1000
+            shift 2
+            ;;
+        --method)
+            METHOD="$2"
+            shift 2
+            ;;
+        --rates)
+            RATES="$2"
+            shift 2
+            ;;
+        --ramp)
+            RAMP="$2"
+            shift 2
+            ;;
+        --settle)
+            SETTLE="$2"
+            shift 2
+            ;;
+        --measure)
+            MEASURE="$2"
+            shift 2
+            ;;
+        --drain)
+            DRAIN="$2"
+            shift 2
+            ;;
+        --max-interval)
+            MAX_INTERVAL="$2"
+            shift 2
+            ;;
+        --fee)
+            STEADY_FEE="$2"
+            shift 2
+            ;;
+        --node-size)
+            NODE_SIZE="$2"
+            shift 2
+            ;;
+        --gen-procs)
+            GEN_PROCS="$2"
+            shift 2
+            ;;
+        --gen-threads)
+            GEN_THREADS="$2"
             shift 2
             ;;
         --rate-start)
@@ -172,6 +257,13 @@ if [[ ${SMOKE} -eq 1 ]]; then
         POOL=70
     else
         POOL=20
+        POOL_SET=1
+        RAMP=5
+        SETTLE=10
+        MEASURE=20
+        DRAIN=10
+        GEN_PROCS=2
+        GEN_THREADS=8
         # The multi-sign N-curve probe needs >=40 accounts (max N signers +
         # payers); the 20-account throughput pool is too small for it.
         [[ ${MULTISIGN} -eq 1 ]] && POOL=50
@@ -214,6 +306,30 @@ OUT="${BENCH_DIR}/results/${LABEL}"
 mkdir -p "${OUT}"
 HYBRID_FLAG=""
 [[ "${PROFILE}" == "hybrid" ]] && HYBRID_FLAG="--hybrid"
+case "${METHOD}" in steady | ramp) ;; *)
+    echo "unknown --method ${METHOD} (steady|ramp)" >&2
+    exit 1
+    ;;
+esac
+export NODE_SIZE
+
+STEADY_URLS="http://${NODE_HOST}:5005,http://${NODE_HOST}:5006,http://${NODE_HOST}:5007"
+VALIDATOR_URLS="http://${NODE_HOST}:5010,http://${NODE_HOST}:5011,http://${NODE_HOST}:5012,http://${NODE_HOST}:5013,http://${NODE_HOST}:5014"
+if [[ "${METHOD}" == "steady" && ${MULTISIGN} -eq 0 && ${MS_THROUGHPUT} -eq 0 ]]; then
+    # Levels the corpus must cover: explicit --rates, else start..rate_expected
+    # plus two steps (so the first failing level above the expected knee runs).
+    if [[ -n "${RATES}" ]]; then
+        STEADY_RATES="${RATES}"
+        CORPUS_RATES="${RATES}"
+    else
+        STEADY_RATES=$(python3 -c "print(','.join(str(r) for r in range(${RATE_START}, ${RATE_CAP}+1, ${RATE_STEP})))")
+        CORPUS_RATES=$(python3 -c "print(','.join(str(r) for r in range(${RATE_START}, min(${RATE_CAP}, ${RATE_EXPECTED}+2*${RATE_STEP})+1, ${RATE_STEP})))")
+    fi
+    TOP_RATE=$(python3 -c "print(max([${CORPUS_RATES}]))")
+    if [[ ${POOL_SET} -eq 0 ]]; then
+        POOL=$(python3 -c "import math;print(math.ceil(${TOP_RATE}*${MAX_INTERVAL}*1.25))")
+    fi
+fi
 
 if [[ ${MULTISIGN} -eq 1 ]]; then
     # The probe needs only a few dozen accounts; shrink the default pool so prep
@@ -304,7 +420,6 @@ fp = {
     "docker": cmd(["docker", "--version"]),
     "git_commit": cmd(["git", "rev-parse", "HEAD"]),
     "mldsa_commit": cmd(["git", "-C", "external/mldsa-native", "rev-parse", "HEAD"]),
-    "node_size": "small",
     "cpuset_note": next((l.split("=", 1)[1].strip().strip('"')
                          for l in open("scripts/devnet/.env")
                          if l.startswith("DEVNET_PINNING_NOTE=")), "unknown"),
@@ -312,6 +427,26 @@ fp = {
 json.dump(fp, open(sys.argv[1], "w"), indent=2)
 print(json.dumps(fp, indent=2))
 PY
+
+python3 - "${OUT}/fingerprint.json" <<PY2
+import json, sys
+p = sys.argv[1]
+fp = json.load(open(p))
+fp.update({
+    "method": "${METHOD}",
+    "node_size": "${NODE_SIZE}" or "auto (xrpld default)",
+    "transaction_queue": "xrpld defaults",
+    "rates": "${STEADY_RATES:-}",
+    "ramp_s": ${RAMP}, "settle_s": ${SETTLE}, "measure_s": ${MEASURE}, "drain_s": ${DRAIN},
+    "max_interval_s": ${MAX_INTERVAL},
+    "fee_drops": ${STEADY_FEE},
+    "pool": ${POOL},
+    "generator": "${GEN_SSH:-local}",
+    "generator_procs": ${GEN_PROCS}, "generator_threads": ${GEN_THREADS},
+    "node_host_from_generator": "${NODE_HOST}",
+})
+json.dump(fp, open(p, "w"), indent=2)
+PY2
 
 echo "=== bring up DevNet ==="
 docker compose -f "${COMPOSE}" up -d --build
@@ -356,7 +491,10 @@ PY
 
 cd "${BENCH_DIR}"
 echo "=== prepare accounts ==="
-python3 prepare_accounts.py --url "${URL}" --pool-size "${POOL}" ${HYBRID_FLAG} --out "${OUT}/accounts.json"
+PREP_FEE_ARGS=()
+[[ "${METHOD}" == "steady" ]] && PREP_FEE_ARGS=(--fee "${STEADY_FEE}")
+python3 prepare_accounts.py --url "${URL}" --pool-size "${POOL}" ${HYBRID_FLAG} \
+    "${PREP_FEE_ARGS[@]}" --out "${OUT}/accounts.json"
 
 if [[ ${MS_THROUGHPUT} -eq 1 ]]; then
     # Clear any prior run's per-N artifacts so a changed N list cannot leave a
@@ -387,7 +525,7 @@ elif [[ ${MULTISIGN} -eq 1 ]]; then
     python3 multisign_probe.py --url "${URL}" --accounts "${OUT}/accounts.json" \
         --perf-dir "${DEVNET_DIR}/perf" --target-events "${MS_TARGET_EVENTS}" \
         --out "${OUT}/multisign.json"
-else
+elif [[ "${METHOD}" == "ramp" ]]; then
     # Open-loop rate-ramp: size the corpus to cover each account's share of every
     # level from start up to the expected knee (plus a warmup burst), +30% safety.
     PER_ACCOUNT=$(python3 -c "import math;rates=list(range(${RATE_START},${RATE_EXPECTED}+1,${RATE_STEP}));total=sum(rates)*${HOLD}+${RATE_START}*15;print(math.ceil(total/${POOL}*1.3))")
@@ -422,17 +560,98 @@ else
         echo "WARNING: disk_after snapshot failed; storage growth unavailable for this run"
 
     wait "${MON_PID}" 2>/dev/null || true
+else
+    # Steady-state method (RippleX review, Appendix A).
+    PER_ACCOUNT=$(python3 -c "
+import math, sys
+sys.path.insert(0, '.')
+from steady_state_driver import corpus_needed
+need = corpus_needed([${CORPUS_RATES}], ${RAMP}, ${SETTLE}, ${MEASURE})
+print(math.ceil(need / ${POOL} * 1.1) + 2)")
+    echo "steady-state: pool ${POOL}, levels ${STEADY_RATES} tx/s (corpus covers ${CORPUS_RATES}),"
+    echo "  ramp ${RAMP}s settle ${SETTLE}s measure ${MEASURE}s, pass <= ${MAX_INTERVAL}s, fee ${STEADY_FEE} drops"
+    echo "=== presign corpus (${PER_ACCOUNT}/account, ${SIGN_THREADS} threads) ==="
+    python3 presign_corpus.py --urls "${DRIVER_URLS}" --accounts "${OUT}/accounts.json" \
+        --per-account "${PER_ACCOUNT}" --fee "${STEADY_FEE}" --threads "${SIGN_THREADS}" \
+        --out "${OUT}/corpus.jsonl"
+
+    echo "=== disk snapshot (before drive) ==="
+    python3 measure_disk.py --out "${OUT}/disk_before.json" ||
+        echo "WARNING: disk_before snapshot failed; storage growth will be unavailable"
+
+    NLVL=$(python3 -c "print(len([${STEADY_RATES}]))")
+    MON_DUR=$(python3 -c "print(int((${RAMP}+${SETTLE}+${MEASURE})*${NLVL}+${DRAIN}+180))")
+    python3 resource_monitor.py --url "${URL}" --duration "${MON_DUR}" --out "${OUT}/monitor.csv" &
+    MON_PID=$!
+
+    DRIVER_ARGS=(--urls "${STEADY_URLS}" --validator-urls "${VALIDATOR_URLS}"
+        --rates "${STEADY_RATES}" --ramp "${RAMP}" --settle "${SETTLE}" --measure "${MEASURE}"
+        --drain "${DRAIN}" --max-interval "${MAX_INTERVAL}"
+        --procs "${GEN_PROCS}" --threads "${GEN_THREADS}")
+    echo "=== steady-state drive ==="
+    if [[ -n "${GEN_SSH}" ]]; then
+        echo "generator on ${GEN_SSH}:${GEN_DIR}, nodes at ${NODE_HOST}"
+        ssh "${GEN_SSH}" "rm -rf '${GEN_DIR}' && mkdir -p '${GEN_DIR}/out'"
+        rsync -az "${BENCH_DIR}"/*.py "${GEN_SSH}:${GEN_DIR}/"
+        rsync -az "${OUT}/corpus.jsonl" "${GEN_SSH}:${GEN_DIR}/corpus.jsonl"
+        ssh "${GEN_SSH}" "uname -a; nproc; grep -m1 'model name' /proc/cpuinfo; python3 --version" \
+            >"${OUT}/generator_host.txt" 2>&1 || true
+        ssh "${GEN_SSH}" "cd '${GEN_DIR}' && python3 steady_state_driver.py --corpus corpus.jsonl \
+            --out out/steady $(printf '%q ' "${DRIVER_ARGS[@]}")"
+        rsync -az "${GEN_SSH}:${GEN_DIR}/out/" "${OUT}/"
+    else
+        echo "local generator (same host as the nodes)" >"${OUT}/generator_host.txt"
+        python3 steady_state_driver.py --corpus "${OUT}/corpus.jsonl" --out "${OUT}/steady" \
+            "${DRIVER_ARGS[@]}"
+    fi
+
+    echo "=== disk snapshot (after drive) ==="
+    python3 measure_disk.py --out "${OUT}/disk_after.json" ||
+        echo "WARNING: disk_after snapshot failed; storage growth unavailable for this run"
+    echo "=== storage breakdown ==="
+    python3 storage_breakdown.py --prefix "${OUT}/steady" \
+        --disk-before "${OUT}/disk_before.json" --disk-after "${OUT}/disk_after.json" \
+        --url "${URL}" --container rippled-stock-1 --accounts "${OUT}/accounts.json" \
+        --out "${OUT}/storage" || echo "WARNING: storage breakdown failed"
+
+    kill "${MON_PID}" 2>/dev/null || true
+    wait "${MON_PID}" 2>/dev/null || true
 fi
 
 echo "=== aggregate ==="
 cd "${REPO_ROOT}"
 python3 "${BENCH_DIR}/aggregate.py" --perf-dir "${DEVNET_DIR}/perf" \
     --monitor "${OUT}/monitor.csv" --driver-prefix "${OUT}/run" \
-    --microbench "${OUT}/sizes.json" --label "${LABEL}" --out "${OUT}/report.md"
+    --microbench "${OUT}/sizes.json" --label "${LABEL}" \
+    --steady-prefix "${OUT}/steady" --storage-md "${OUT}/storage.md" --out "${OUT}/report.md"
 
 # A run that finishes without all its data is the failure mode that cost an overnight
 # sweep its storage and ECC verify numbers, so fail loudly now naming what is missing
 # rather than discovering the gap weeks later.
+echo "=== collect raw data (before teardown deletes the node volumes) ==="
+RAW="${OUT}/raw"
+rm -rf "${RAW}"
+mkdir -p "${RAW}/logs" "${RAW}/configs"
+cp -r "${DEVNET_DIR}/perf" "${RAW}/perf" 2>/dev/null || true
+cp "${DEVNET_DIR}/.env" "${RAW}/configs/devnet.env" 2>/dev/null || true
+for d in "${DEVNET_DIR}"/configs/*/; do
+    n=$(basename "${d}")
+    mkdir -p "${RAW}/configs/${n}"
+    cp "${d}validators.txt" "${RAW}/configs/${n}/" 2>/dev/null || true
+    # DevNet-only validator tokens are dropped from the published copy.
+    awk '/^\[validator_token\]/{skip=1; print; print "<redacted>"; next} /^\[/{skip=0} !skip' \
+        "${d}xrpld.cfg" >"${RAW}/configs/${n}/xrpld.cfg" 2>/dev/null || true
+done
+for c in $(docker ps --format '{{.Names}}' | grep '^rippled-' | sort); do
+    docker cp "${c}:/var/lib/rippled/debug.log" - 2>/dev/null | tar -xO 2>/dev/null |
+        gzip >"${RAW}/logs/${c}.debug.log.gz" || true
+    [[ -s "${RAW}/logs/${c}.debug.log.gz" ]] || rm -f "${RAW}/logs/${c}.debug.log.gz"
+    curl -s -m 10 -d '{"method":"server_info","params":[{"counters":true}]}' \
+        "http://127.0.0.1:$(docker port "${c}" 5005/tcp 2>/dev/null | head -1 | cut -d: -f2)" \
+        >"${RAW}/logs/${c}.server_info.final.json" 2>/dev/null || true
+done
+docker compose -f "${COMPOSE}" ps >"${RAW}/compose_ps.txt" 2>&1 || true
+
 echo "=== completeness check ==="
 MISSING=()
 grep -ql '"event"' "${DEVNET_DIR}"/perf/*/perf.log 2>/dev/null || MISSING+=("in-process probes")
@@ -441,6 +660,16 @@ if [[ ${MULTISIGN} -eq 1 ]]; then
     [[ -s "${OUT}/multisign.json" ]] || MISSING+=("multi-sign verify curve")
 elif [[ ${MS_THROUGHPUT} -eq 1 ]]; then
     ls "${OUT}"/run_ms*.cl_summary.json >/dev/null 2>&1 || MISSING+=("multi-sign throughput")
+elif [[ "${METHOD}" == "steady" ]]; then
+    [[ -s "${OUT}/monitor.csv" ]] || MISSING+=("resource monitor")
+    python3 -c "import json,sys;sys.exit(0 if json.load(open('${OUT}/steady.summary.json')).get('levels') else 1)" \
+        2>/dev/null || MISSING+=("steady-state levels")
+    [[ -s "${OUT}/steady.ledgers.jsonl" ]] || MISSING+=("per-ledger record")
+    grep -q '"node":"validator-' "${OUT}/steady.server_info.jsonl" 2>/dev/null || MISSING+=("validator samples")
+    [[ -s "${OUT}/steady.fee.jsonl" ]] || MISSING+=("queue/fee samples")
+    ls "${OUT}"/steady.submits.p*.csv.gz >/dev/null 2>&1 || MISSING+=("per-submit generator log")
+    [[ -s "${OUT}/storage.json" ]] || MISSING+=("storage breakdown")
+    ls "${OUT}"/raw/logs/*.debug.log.gz >/dev/null 2>&1 || MISSING+=("node debug logs")
 else
     [[ -s "${OUT}/monitor.csv" ]] || MISSING+=("resource monitor")
     python3 -c "import json,sys;sys.exit(0 if json.load(open('${OUT}/run.cl_summary.json')).get('levels') else 1)" \

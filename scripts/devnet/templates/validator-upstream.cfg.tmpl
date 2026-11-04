@@ -20,8 +20,7 @@ port = 51235
 ip = 0.0.0.0
 protocol = peer
 
-[node_size]
-small
+__NODE_SIZE_SECTION__
 
 [node_db]
 type=NuDB
@@ -49,8 +48,3 @@ log_interval = 1
 [validation_seed]
 __VALIDATION_SEED__
 
-[transaction_queue]
-minimum_txn_in_ledger = 10000
-minimum_txn_in_ledger_standalone = 10000
-target_txn_in_ledger = 10000
-maximum_txn_in_ledger = 20000

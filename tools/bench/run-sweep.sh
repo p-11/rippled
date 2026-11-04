@@ -6,20 +6,25 @@
 # hybrid configs share one rate band: it only has to bracket the highest knee, so
 # the wider ECC band covers both and gives the lower hybrid knee corpus headroom.
 #
+# The single-sign throughput configs use the steady-state method from the
+# RippleX review (run-suite.sh --method steady): xrpld default queue settings,
+# ramp / settle / measure per level, pass while every validated-ledger interval
+# stays <= 5 s, throughput from the ledgers, account pool sized automatically.
+# summarize_repeats.py then checks the repeats agree within one load step.
+#
 # Usage:
-#   tools/bench/run-sweep.sh [--repeats N] [--pool N] [--hold S]
+#   tools/bench/run-sweep.sh [--repeats N] [--pool N|auto] [--measure S]
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}" || exit 1
 
 REPEATS=3
-POOL=3000
-HOLD=20
-WARMUP=5
-# One rate band for every single-sign throughput config: ECC saturates near
-# ~2000 tps and hybrid lower, so this brackets both knees. cap is the ramp's
-# safety ceiling, expected sizes the pre-signed corpus depth.
-RATE=(--rate-start 500 --rate-step 250 --rate-cap 3750 --rate-expected 3000)
+POOL=auto
+MEASURE=120
+# One rate band for every single-sign throughput config. Each level is held to
+# steady state, so the run stops at the first level that breaks the 5 s
+# criterion; cap is only a ceiling, rate-expected sizes the pre-signed corpus.
+RATE=(--rate-start 250 --rate-step 250 --rate-cap 4000 --rate-expected 3000)
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --repeats)
@@ -30,12 +35,12 @@ while [[ $# -gt 0 ]]; do
             POOL="$2"
             shift 2
             ;;
-        --hold)
-            HOLD="$2"
+        --measure)
+            MEASURE="$2"
             shift 2
             ;;
         -h | --help)
-            echo "Usage: tools/bench/run-sweep.sh [--repeats N] [--pool N] [--hold S]"
+            echo "Usage: tools/bench/run-sweep.sh [--repeats N] [--pool N|auto] [--measure S]"
             exit 0
             ;;
         *)
@@ -45,7 +50,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-COMMON=(--pool "${POOL}" --hold "${HOLD}" --warmup "${WARMUP}")
+COMMON=(--method steady --pool "${POOL}" --measure "${MEASURE}")
 
 LOG="/tmp/bench-sweep.log"
 : >"${LOG}"
@@ -92,11 +97,8 @@ fi
 echo "ALL_SWEEP_DONE repeats=${REPEATS} ($(date -u +%H:%M:%SZ))" | tee -a "${LOG}"
 touch /tmp/bench-sweep.done
 
-# Exclude the pre-signed corpora (*.jsonl): they are large run inputs, not
-# results, and the report needs none of them.
-TARBALL="/tmp/bench-results.tgz"
-echo
-echo "=== packing results into ${TARBALL} (corpora excluded) ===" | tee -a "${LOG}"
-tar czf "${TARBALL}" -C tools/bench --exclude='*.jsonl' results
-echo "Results packed: ${TARBALL} ($(du -h "${TARBALL}" | cut -f1))" | tee -a "${LOG}"
-echo "Pull it with:  scp <user>@<host>:${TARBALL} ." | tee -a "${LOG}"
+python3 tools/bench/summarize_repeats.py --results tools/bench/results \
+    --baseline upstream --compare hybrid --out tools/bench/results/sweep_summary.md | tee -a "${LOG}"
+
+# Package the raw data for publication (corpora and account secrets excluded).
+bash tools/bench/package-results.sh tools/bench/results /tmp/bench-results | tee -a "${LOG}"

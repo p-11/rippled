@@ -235,6 +235,75 @@ def resource_table(monitor: dict[str, dict[str, list[float]]]) -> str:
     )
 
 
+
+def steady_section(prefix: str) -> list[str]:
+    """Steady-state capacity: highest load at which every validated-ledger
+    interval in the measurement window stayed within the limit."""
+    with open(f"{prefix}.summary.json", encoding="utf-8") as f:
+        sm = json.load(f)
+    cap = sm.get("capacity")
+    out = ["## Capacity (steady state, validated-ledger interval criterion)\n"]
+    out.append(f"- Criterion: {sm['criterion']}.")
+    if cap:
+        out.append(
+            f"- Capacity: **{cap['rate']} tx/s** offered; ledgers carried "
+            f"**{cap['ledger_tps']} tps** ({cap['txn_per_ledger_mean']} tx per ledger, "
+            f"max interval {cap['max_interval_s']} s)."
+        )
+    else:
+        out.append("- No level passed.")
+    if sm.get("first_failure"):
+        ff = sm["first_failure"]
+        out.append(f"- First non-passing level: {ff['rate']} tx/s ({ff['verdict']}).")
+    if sm.get("stop_reason"):
+        out.append(f"- Run stopped: {sm['stop_reason']}.")
+    rows = []
+    for r in sm["levels"]:
+        g, lg, inc = r["generator"], r["ledger"], r["inclusion"]
+        eng = r["engine_results"]
+        vals = list(r["validators"].values())
+        conv = [v["converge_time_max_s"] for v in vals if v.get("converge_time_max_s") is not None]
+        back = [v["job_backlog_max"] for v in vals if v.get("job_backlog_max") is not None]
+        rows.append(
+            [
+                r["rate"],
+                r["verdict"],
+                lg["max_interval_s"],
+                lg["txn_per_ledger_mean"],
+                lg["ledger_tps"],
+                f"{g['delivery']:.3f}",
+                g["send_lag_p99_s"],
+                g["submit_rpc_ms_p99"],
+                eng.get("tesSUCCESS", 0),
+                eng.get("terQUEUED", 0),
+                sum(v for k, v in eng.items() if k not in ("tesSUCCESS", "terQUEUED")),
+                inc["validated_in_window_frac"],
+                inc["validated_with_drain_frac"],
+                max(conv) if conv else "-",
+                max(back) if back else "-",
+            ]
+        )
+    out.append("")
+    out.append(
+        md_table(
+            [
+                "rate", "verdict", "max_interval_s", "tx/ledger", "ledger_tps",
+                "sent/target", "send_lag_p99_s", "submit_ms_p99", "tesSUCCESS",
+                "terQUEUED", "other", "valid_in_window", "valid_w_drain",
+                "val_round_max_s", "val_backlog_max",
+            ],
+            rows,
+        )
+    )
+    out.append(
+        "\n_Only the steady-state window of each level is scored. Throughput is "
+        "read from the validated ledgers. A level is GENERATOR-LIMITED when the "
+        "load generator did not deliver its target rate on schedule; such a level "
+        "says nothing about the network. Raw per-submit, per-ledger, validator and "
+        "queue samples are in the run's raw/ directory._\n"
+    )
+    return out
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--perf-dir", default="scripts/devnet/perf")
@@ -244,6 +313,12 @@ def main() -> int:
     ap.add_argument("--disk-before", default=None)
     ap.add_argument("--disk-after", default=None)
     ap.add_argument("--label", default="run")
+    ap.add_argument(
+        "--steady-prefix",
+        default=None,
+        help="steady_state_driver --out prefix; renders the steady-state section",
+    )
+    ap.add_argument("--storage-md", default=None, help="storage_breakdown.py OUT.md to include")
     ap.add_argument("--out", default="report.md")
     args = ap.parse_args()
 
@@ -256,6 +331,12 @@ def main() -> int:
     monitor = parse_monitor(args.monitor)
 
     parts = [f"# Benchmark report: {args.label}\n"]
+
+    if args.steady_prefix and os.path.exists(f"{args.steady_prefix}.summary.json"):
+        parts.extend(steady_section(args.steady_prefix))
+    if args.storage_md and os.path.exists(args.storage_md):
+        with open(args.storage_md, encoding="utf-8") as f:
+            parts.append("\n" + f.read())
 
     cl_path = f"{args.driver_prefix}.cl_summary.json"
     if os.path.exists(cl_path):

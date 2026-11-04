@@ -51,6 +51,33 @@ def du_bytes(container: str, path: str, attempts: int = 5, timeout: int = 60) ->
     return -1
 
 
+def du_components(container: str, path: str = DB_PATH, timeout: int = 60) -> dict:
+    """Per-component sizes inside the database directory: the NuDB node store
+    and each SQLite file (with its WAL), so growth can be attributed to the node
+    store vs. the transaction / ledger databases. {} if unavailable."""
+    script = (
+        f"cd {path} 2>/dev/null || exit 1; "
+        "for p in nudb *.db *.db-wal *.db-shm; do [ -e \"$p\" ] && du -sb \"$p\"; done; true"
+    )
+    try:
+        r = subprocess.run(
+            ["docker", "exec", container, "sh", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out = {}
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            out[parts[1].strip()] = int(parts[0])
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -68,8 +95,18 @@ def main() -> int:
         else discover_containers()
     )
     sizes = {c: du_bytes(c, args.path) for c in containers}
+    components = {c: du_components(c, args.path) for c in containers}
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump({"path": args.path, "sizes_bytes": sizes}, f, indent=2)
+        json.dump(
+            {
+                "t": time.time(),
+                "path": args.path,
+                "sizes_bytes": sizes,
+                "components_bytes": components,
+            },
+            f,
+            indent=2,
+        )
     summary = ", ".join(f"{c}={b}" for c, b in sizes.items())
     print(f"disk snapshot ({args.path}): {summary}")
     # Return non-zero on an empty/all-failed snapshot so the caller does not record

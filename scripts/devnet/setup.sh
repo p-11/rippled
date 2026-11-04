@@ -20,6 +20,14 @@ XRPLD="${XRPLD:-${REPO_ROOT}/.build/xrpld}"
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 PERF_DIR="${SCRIPT_DIR}/perf"
 PROFILE="${PROFILE:-hybrid}"
+# NODE_SIZE: empty (default) omits [node_size] so xrpld picks its own size from
+# RAM and cores, which is the mainnet recommended starting point (see
+# cfg/xrpld-example.cfg). Set tiny|small|medium|large|huge to pin it. The
+# transaction queue / open ledger settings are deliberately left at xrpld
+# defaults so they are not a variable in the measurement.
+NODE_SIZE="${NODE_SIZE:-}"
+NODE_SIZE_SECTION=""
+[[ -n "${NODE_SIZE}" ]] && NODE_SIZE_SECTION=$'[node_size]\n'"${NODE_SIZE}"
 
 QUANTUM_HASH="8BDE7A46A94C208C968B694659D99F89D5552A1F89F1879B7315AF2ADB3F390B"
 
@@ -92,6 +100,7 @@ IPS_FIXED="${IPS_FIXED%$'\n'}"
 # Render a template, substituting the shared placeholders. $1=template $2=output.
 render() {
     sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+        -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
         -e "s|__AMENDMENTS_SECTION__|${AMENDMENTS_SECTION//$'\n'/\\n}|" \
         -e "s|__PQ_VALIDATIONS_SECTION__|${PQ_VALIDATIONS_SECTION//$'\n'/\\n}|" \
         "$1" >"$2"
@@ -110,6 +119,7 @@ for i in 1 2 3 4 5; do
         # so this path makes no calls to xrpld and runs on the develop binary.
         VALIDATORS_TXT_BODY+="    ${UPSTREAM_VAL_PUBKEYS[$((i - 1))]}"$'\n'
         sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+        -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
             -e "s|__VALIDATION_SEED__|${UPSTREAM_VAL_SEEDS[$((i - 1))]}|" \
             "${SCRIPT_DIR}/templates/validator-upstream.cfg.tmpl" \
             >"${NODE_DIR}/xrpld.cfg"
@@ -134,6 +144,7 @@ for i in 1 2 3 4 5; do
     VALIDATORS_TXT_BODY+="    ${MASTER_ECC_PK}"$'\n'
 
     sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+        -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
         -e "s|__AMENDMENTS_SECTION__|${AMENDMENTS_SECTION//$'\n'/\\n}|" \
         -e "s|__PQ_VALIDATIONS_SECTION__|${PQ_VALIDATIONS_SECTION//$'\n'/\\n}|" \
         -e "s|__VALIDATOR_TOKEN__|${TOKEN_WRAPPED//$'\n'/\\n}|" \
