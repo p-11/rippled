@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import bench_lib as bl
 
-FIXED_FEE = "5000"  # held constant; see prepare_accounts.py
+FIXED_FEE = "1000000"  # held constant across configurations; see prepare_accounts.py
 PAY_DROPS = "1000"
 
 
@@ -34,12 +34,16 @@ def build_corpus(
     # on-ledger value and every submit fails tefPAST_SEQ. Spread reads across
     # endpoints so no single node is hammered.
     bl.wait_nodes_converged(urls)
-    base_seq = {
-        rec["account"]: bl.account_sequence(
-            urls[i % len(urls)], rec["account"], validated=True
+    with ThreadPoolExecutor(max_workers=threads) as ex:
+        seqs = list(
+            ex.map(
+                lambda ir: bl.account_sequence(
+                    urls[ir[0] % len(urls)], ir[1]["account"], validated=True
+                ),
+                enumerate(accounts),
+            )
         )
-        for i, rec in enumerate(accounts)
-    }
+    base_seq = {rec["account"]: s for rec, s in zip(accounts, seqs)}
 
     # Order round-robin (round k of every account, then k+1) so consecutive
     # entries are distinct accounts; ex.map preserves this order in the output.
@@ -82,7 +86,7 @@ def build_corpus(
 
     with ThreadPoolExecutor(max_workers=threads) as ex:
         for n, _ in enumerate(ex.map(sign_one, range(len(tasks)))):
-            if (n + 1) % 2000 == 0:
+            if (n + 1) % 20000 == 0:
                 print(f"  signed {n + 1}/{len(tasks)} txs", flush=True)
     return corpus
 
