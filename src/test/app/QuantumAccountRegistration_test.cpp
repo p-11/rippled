@@ -58,6 +58,17 @@ class QuantumAccountRegistration_test : public beast::unit_test::Suite
         return jv;
     }
 
+    static json::Value
+    rotateQuantum(jtx::Account const& a, jtx::PQKey const& newKey)
+    {
+        json::Value jv;
+        jv[jss::Account] = a.human();
+        jv[jss::TransactionType] = jss::AccountSet;
+        jv[jss::SetFlag] = asfQuantum;
+        jv[jss::QuantumMasterPublicKey] = strHex(newKey.publicKey());
+        return jv;
+    }
+
     static Blob
     pkBytes(jtx::PQKey const& key)
     {
@@ -98,6 +109,44 @@ public:
         env(clearQuantum(alice), quantum_sign(alice, pq));
         env.close();
         BEAST_EXPECT(!env.le(alice)->isFieldPresent(sfQuantumPubKey));
+    }
+
+    void
+    testRotateInPlace(KeyType keyType)
+    {
+        testcase(label("Rotate quantum public key in place", keyType));
+        using namespace jtx;
+
+        Env env{*this, withQuantum()};
+        Account const alice{"alice", keyType};
+        env.fund(XRP(10000), alice);
+        env.close();
+
+        auto pqOld = PQKey::generate();
+        auto pqNew = PQKey::generate();
+
+        env(registerQuantum(alice, pqOld), quantum_sign(alice, pqOld));
+        env.close();
+        BEAST_EXPECT(env.le(alice)->getFieldVL(sfQuantumPubKey) == pkBytes(pqOld));
+
+        // Rotation is signed with the current key and installs the new key in
+        // the same transaction. The account never leaves opt-in.
+        env(rotateQuantum(alice, pqNew), quantum_sign(alice, pqOld));
+        env.close();
+        BEAST_EXPECT(env.le(alice)->getFieldVL(sfQuantumPubKey) == pkBytes(pqNew));
+
+        // After rotation the old key no longer authenticates, the new one does.
+        env(noop(alice), quantum_sign(alice, pqOld), Ter(tefBAD_AUTH));
+        env.close();
+        env(noop(alice), quantum_sign(alice, pqNew));
+        env.close();
+
+        // Rotation cannot be driven by a key other than the current one, so a
+        // holder of the classical key alone cannot replace the quantum key.
+        auto pqAttacker = PQKey::generate();
+        env(rotateQuantum(alice, pqAttacker), quantum_sign(alice, pqAttacker), Ter(tefBAD_AUTH));
+        env.close();
+        BEAST_EXPECT(env.le(alice)->getFieldVL(sfQuantumPubKey) == pkBytes(pqNew));
     }
 
     void
@@ -538,6 +587,7 @@ public:
     runFor(KeyType keyType)
     {
         testRegisterAndClear(keyType);
+        testRotateInPlace(keyType);
         testSingleSignAuthentication(keyType);
         testMultiSignFundedSigners(keyType);
         testMultiSignPhantomSigners(keyType);

@@ -188,6 +188,27 @@ AccountSet::preflight(PreflightContext const& ctx)
         }
     }
 
+    // Quantum: in place rotation of the registered key. The new key travels
+    // in sfQuantumMasterPublicKey, a signing field so both signatures commit
+    // to it, and is only valid alongside an asfQuantum set signed with the
+    // current key. doApply installs it once checkSingleSign has authenticated
+    // the current key, so the account never drops to classical only.
+    if (tx.isFieldPresent(sfQuantumMasterPublicKey))
+    {
+        if (!ctx.rules.enabled(featureQuantum))
+            return temDISABLED;
+        if (uSetFlag != asfQuantum)
+        {
+            JLOG(j.trace()) << "sfQuantumMasterPublicKey requires asfQuantum.";
+            return temMALFORMED;
+        }
+        if (tx.getFieldVL(sfQuantumMasterPublicKey).size() != kPQPublicKeySize)
+        {
+            JLOG(j.trace()) << "asfQuantum: rotation public key has invalid size.";
+            return temMALFORMED;
+        }
+    }
+
     return tesSUCCESS;
 }
 
@@ -690,13 +711,20 @@ AccountSet::doApply()
     {
         if (uSetFlag == asfQuantum)
         {
-            Blob const pq = tx.getFieldVL(sfQuantumPubKey);
+            // An opt-in that also carries sfQuantumMasterPublicKey is a
+            // rotation: checkSingleSign has already verified the current key,
+            // so install the new one in the same transaction.
+            bool const rotate =
+                sle->isFieldPresent(sfQuantumPubKey) && tx.isFieldPresent(sfQuantumMasterPublicKey);
+            Blob const pq =
+                rotate ? tx.getFieldVL(sfQuantumMasterPublicKey) : tx.getFieldVL(sfQuantumPubKey);
             // preflight already enforces presence and size; defend in
             // depth against a future code path that might bypass it.
             XRPL_ASSERT(
                 pq.size() == kPQPublicKeySize,
                 "xrpl::AccountSet::doApply : quantum public key size");
-            JLOG(j_.trace()) << "register quantum public key";
+            JLOG(j_.trace())
+                << (rotate ? "rotate quantum public key" : "register quantum public key");
             sle->setFieldVL(sfQuantumPubKey, pq);
         }
         else if (uClearFlag == asfQuantum && sle->isFieldPresent(sfQuantumPubKey))

@@ -32,6 +32,7 @@ TxFormats::getCommonFields()
         {sfDelegate, SoeOptional},
         {sfQuantumPubKey, SoeOptional},
         {sfQuantumSignature, SoeOptional},
+        {sfQuantumMasterPublicKey, SoeOptional},
     };
     return kCommonFields;
 }
