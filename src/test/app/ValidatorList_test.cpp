@@ -15,6 +15,7 @@
 #include <xrpl/beast/utility/Journal.h>
 #include <xrpl/protocol/HashPrefix.h>
 #include <xrpl/protocol/KeyType.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/SField.h>
 #include <xrpl/protocol/STObject.h>
@@ -22,6 +23,7 @@
 #include <xrpl/protocol/Serializer.h>
 #include <xrpl/protocol/Sign.h>
 #include <xrpl/protocol/UintTypes.h>
+#include <xrpl/protocol/detail/mldsa.h>
 #include <xrpl/protocol/digest.h>
 #include <xrpl/protocol/jss.h>
 #include <xrpl/protocol/tokens.h>
@@ -102,6 +104,34 @@ private:
     }
 
     static std::string
+    makeQuantumManifestString(
+        PublicKey const& pk,
+        SecretKey const& sk,
+        PublicKey const& spk,
+        SecretKey const& ssk,
+        int seq,
+        Slice pqMasterPub,
+        Slice pqMasterSec)
+    {
+        STObject st(sfGeneric);
+        st[sfSequence] = seq;
+        st[sfPublicKey] = pk;
+        st[sfSigningPubKey] = spk;
+        st.setFieldVL(sfQuantumMasterPublicKey, pqMasterPub);
+
+        // NOLINTBEGIN(bugprone-unchecked-optional-access)
+        sign(st, HashPrefix::Manifest, *publicKeyType(spk), ssk);
+        sign(st, HashPrefix::Manifest, *publicKeyType(pk), sk, sfMasterSignature);
+        // NOLINTEND(bugprone-unchecked-optional-access)
+        pqSign(st, HashPrefix::Manifest, pqMasterSec, sfQuantumMasterSignature);
+
+        Serializer s;
+        st.add(s);
+
+        return std::string(static_cast<char const*>(s.data()), s.size());
+    }
+
+    static std::string
     makeRevocationString(PublicKey const& pk, SecretKey const& sk)
     {
         STObject st(sfGeneric);
@@ -159,6 +189,13 @@ private:
     {
         auto const data = base64Decode(blob);
         return strHex(sign(keys.first, keys.second, makeSlice(data)));
+    }
+
+    static std::string
+    pqSignList(std::string const& blob, Slice pqSecretKey)
+    {
+        auto const data = base64Decode(blob);
+        return strHex(pqSign(pqSecretKey, makeSlice(data)));
     }
 
     static hash_set<NodeID>
@@ -916,6 +953,71 @@ private:
         }
 
         checkAvailable(trustedKeys, hexPublic, manifest2, 0, {});
+    }
+
+    void
+    testQuantumPublisherList()
+    {
+        testcase("Quantum publisher list");
+        using namespace std::chrono_literals;
+
+        std::string const siteUri = "testQuantumPublisherList.test";
+
+        ManifestCache manifests;
+        jtx::Env env(*this);
+        auto& app = env.app();
+        auto trustedKeys = std::make_unique<ValidatorList>(
+            manifests,
+            manifests,
+            env.app().getTimeKeeper(),
+            app.config().legacy("database_path"),
+            env.journal);
+
+        auto const publisherSecret = randomSecretKey();
+        auto const publisherPublic = derivePublicKey(KeyType::Ed25519, publisherSecret);
+        auto const pubSigningKeys = randomKeyPair(KeyType::Secp256k1);
+        auto [pqMasterPub, pqMasterSec] = mldsa::keypair();
+        auto [otherPqPub, otherPqSec] = mldsa::keypair();
+        (void)otherPqPub;
+
+        auto const manifest = base64Encode(makeQuantumManifestString(
+            publisherPublic,
+            publisherSecret,
+            pubSigningKeys.first,
+            pubSigningKeys.second,
+            1,
+            Slice(pqMasterPub),
+            Slice(pqMasterSec)));
+
+        std::vector<std::string> const cfgPublisherKeys({strHex(publisherPublic)});
+        std::vector<std::string> const emptyCfgKeys;
+        BEAST_EXPECT(trustedKeys->load({}, emptyCfgKeys, cfgPublisherKeys));
+
+        std::vector<Validator> const list{randomValidator()};
+        NetClock::time_point const validUntil = env.timeKeeper().now() + 3600s;
+        auto const blob = makeList(list, 1, validUntil.time_since_epoch().count());
+        auto const sig = signList(blob, pubSigningKeys);
+        auto const pqSig = pqSignList(blob, Slice(pqMasterSec));
+        auto const wrongPqSig = pqSignList(blob, Slice(otherPqSec));
+
+        // The publisher declared a quantum key. A list signed only
+        // classically must be rejected.
+        BEAST_EXPECT(
+            trustedKeys->applyLists(manifest, 1, {{blob, sig, {}}}, siteUri)
+                .bestDisposition() == ListDisposition::Invalid);
+
+        // A quantum signature from a different key must be rejected.
+        BEAST_EXPECT(
+            trustedKeys
+                ->applyLists(
+                    manifest, 1, {{blob, sig, std::nullopt, wrongPqSig}}, siteUri)
+                .bestDisposition() == ListDisposition::Invalid);
+
+        // The matching quantum signature is accepted.
+        BEAST_EXPECT(
+            trustedKeys
+                ->applyLists(manifest, 1, {{blob, sig, std::nullopt, pqSig}}, siteUri)
+                .bestDisposition() == ListDisposition::Accepted);
     }
 
     void
@@ -3937,6 +4039,7 @@ public:
         testGenesisQuorum();
         testConfigLoad();
         testApplyLists();
+        testQuantumPublisherList();
         testGetAvailable();
         testUpdateTrusted();
         testExpires();

@@ -102,6 +102,9 @@ struct ValidatorBlobInfo
     // base-64 or hex-encoded manifest containing the publisher's master and
     // signing public keys
     std::optional<std::string> manifest;
+    // hex-encoded ML-DSA-44 signature of the blob, required and verified
+    // only when the publisher's manifest declares a quantum signing key
+    std::optional<std::string> pqSignature;
 };
 
 /**
@@ -168,6 +171,9 @@ class ValidatorList
         // base-64 or hex-encoded manifest containing the publisher's master and
         // signing public keys
         std::optional<std::string> rawManifest;
+        // hex-encoded ML-DSA-44 signature of the blob, present only when the
+        // publisher's manifest declares a quantum signing key
+        std::optional<std::string> rawPqSignature;
         uint256 hash;
     };
 
@@ -756,6 +762,7 @@ private:
         std::optional<std::string> const& localManifest,
         std::string const& blob,
         std::string const& signature,
+        std::optional<std::string> const& pqSignature,
         std::uint32_t version,
         std::string siteUri,
         std::optional<uint256> const& hash,
@@ -852,7 +859,8 @@ private:
         json::Value& list,
         Manifest manifest,
         std::string const& blob,
-        std::string const& signature);
+        std::string const& signature,
+        std::optional<std::string> const& pqSignature);
 
     /** Stop trusting publisher's list of keys.
 

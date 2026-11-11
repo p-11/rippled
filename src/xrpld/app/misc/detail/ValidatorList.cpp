@@ -20,6 +20,7 @@
 #include <xrpl/json/json_forwards.h>
 #include <xrpl/json/json_reader.h>
 #include <xrpl/json/json_value.h>
+#include <xrpl/protocol/PQSign.h>
 #include <xrpl/protocol/PublicKey.h>
 #include <xrpl/protocol/STValidation.h>
 #include <xrpl/protocol/UintTypes.h>
@@ -329,6 +330,8 @@ ValidatorList::buildFileData(
             auto const& current = pubCollection.current;
             value[jss::blob] = current.rawBlob;
             value[jss::signature] = current.rawSignature;
+            if (current.rawPqSignature)
+                value[jss::pq_signature] = *current.rawPqSignature;
             // This is only possible if "downgrading" a v2 UNL to v1, for
             // example for the /vl/ endpoint.
             if (current.rawManifest && *current.rawManifest != pubCollection.rawManifest)
@@ -343,6 +346,8 @@ ValidatorList::buildFileData(
                 auto& blob = blobs.append(json::ValueType::Object);
                 blob[jss::blob] = pubList.rawBlob;
                 blob[jss::signature] = pubList.rawSignature;
+                if (pubList.rawPqSignature)
+                    blob[jss::pq_signature] = *pubList.rawPqSignature;
                 if (pubList.rawManifest && *pubList.rawManifest != outerManifest)
                     blob[jss::manifest] = *pubList.rawManifest;
             };
@@ -409,6 +414,12 @@ ValidatorList::parseBlobs(std::uint32_t version, json::Value const& body)
             ValidatorBlobInfo& info = result.emplace_back();
             info.blob = body[jss::blob].asString();
             info.signature = body[jss::signature].asString();
+            if (body.isMember(jss::pq_signature))
+            {
+                if (!body[jss::pq_signature].isString())
+                    return {};
+                info.pqSignature = body[jss::pq_signature].asString();
+            }
             XRPL_ASSERT(
                 result.size() == 1, "xrpl::ValidatorList::parseBlobs : single element result");
             return result;
@@ -441,6 +452,12 @@ ValidatorList::parseBlobs(std::uint32_t version, json::Value const& body)
                         return {};
                     info.manifest = blobInfo[jss::manifest].asString();
                 }
+                if (blobInfo.isMember(jss::pq_signature))
+                {
+                    if (!blobInfo[jss::pq_signature].isString())
+                        return {};
+                    info.pqSignature = blobInfo[jss::pq_signature].asString();
+                }
             }
             XRPL_ASSERT(
                 result.size() == blobs.size(),
@@ -455,7 +472,12 @@ ValidatorList::parseBlobs(std::uint32_t version, json::Value const& body)
 std::vector<ValidatorBlobInfo>
 ValidatorList::parseBlobs(protocol::TMValidatorList const& body)
 {
-    return {{body.blob(), body.signature(), {}}};
+    return {
+        {body.blob(),
+         body.signature(),
+         {},
+         body.has_pq_signature() ? std::optional<std::string>{body.pq_signature()}
+                                  : std::nullopt}};
 }
 
 // static
@@ -471,6 +493,10 @@ ValidatorList::parseBlobs(protocol::TMValidatorListCollection const& body)
         ValidatorBlobInfo& info = result.emplace_back();
         info.blob = blob.blob();
         info.signature = blob.signature();
+        if (blob.has_pq_signature())
+        {
+            info.pqSignature = blob.pq_signature();
+        }
         if (blob.has_manifest())
         {
             info.manifest = blob.manifest();
@@ -531,6 +557,8 @@ splitMessageParts(
         auto const& blob = largeMsg.blobs(begin);
         smallMsg.set_blob(blob.blob());
         smallMsg.set_signature(blob.signature());
+        if (blob.has_pq_signature())
+            smallMsg.set_pq_signature(blob.pq_signature());
         // This is only possible if "downgrading" a v2 UNL to v1.
         if (blob.has_manifest())
             smallMsg.set_manifest(blob.manifest());
@@ -589,6 +617,8 @@ buildValidatorListMessage(
     msg.set_manifest(manifest);
     msg.set_blob(currentBlob.blob);
     msg.set_signature(currentBlob.signature);
+    if (currentBlob.pqSignature)
+        msg.set_pq_signature(*currentBlob.pqSignature);
     // Override the version
     msg.set_version(version);
 
@@ -628,6 +658,8 @@ buildValidatorListMessage(
         protocol::ValidatorBlobInfo& blob = *msg.add_blobs();
         blob.set_blob(blobInfo.blob);
         blob.set_signature(blobInfo.signature);
+        if (blobInfo.pqSignature)
+            blob.set_pq_signature(*blobInfo.pqSignature);
         if (blobInfo.manifest)
             blob.set_manifest(*blobInfo.manifest);
     }
@@ -826,11 +858,15 @@ ValidatorList::buildBlobInfos(
     blobInfos[current.sequence] = {
         .blob = current.rawBlob,
         .signature = current.rawSignature,
-        .manifest = current.rawManifest};
+        .manifest = current.rawManifest,
+        .pqSignature = current.rawPqSignature};
     for (auto const& [sequence, vl] : remaining)
     {
         blobInfos[sequence] = {
-            .blob = vl.rawBlob, .signature = vl.rawSignature, .manifest = vl.rawManifest};
+            .blob = vl.rawBlob,
+            .signature = vl.rawSignature,
+            .manifest = vl.rawManifest,
+            .pqSignature = vl.rawPqSignature};
     }
 }
 
@@ -992,6 +1028,7 @@ ValidatorList::applyLists(
             blobInfo.manifest,
             blobInfo.blob,
             blobInfo.signature,
+            blobInfo.pqSignature,
             version,
             siteUri,
             hash,
@@ -1118,6 +1155,7 @@ ValidatorList::applyList(
     std::optional<std::string> const& localManifest,
     std::string const& blob,
     std::string const& signature,
+    std::optional<std::string> const& pqSignature,
     std::uint32_t version,
     std::string siteUri,
     std::optional<uint256> const& hash,
@@ -1134,7 +1172,8 @@ ValidatorList::applyList(
         return PublisherListStats{ListDisposition::Invalid};
     }
 
-    auto [result, pubKeyOpt] = verify(lock, list, std::move(*m), blob, signature);
+    auto [result, pubKeyOpt] =
+        verify(lock, list, std::move(*m), blob, signature, pqSignature);
 
     if (!pubKeyOpt)
     {
@@ -1220,6 +1259,7 @@ ValidatorList::applyList(
         publisher.siteUri = std::move(siteUri);
         publisher.rawBlob = blob;
         publisher.rawSignature = signature;
+        publisher.rawPqSignature = pqSignature;
         publisher.rawManifest = localManifest;
         if (hash)
             publisher.hash = *hash;
@@ -1340,7 +1380,8 @@ ValidatorList::verify(
     json::Value& list,
     Manifest manifest,
     std::string const& blob,
-    std::string const& signature)
+    std::string const& signature,
+    std::optional<std::string> const& pqSignature)
 {
     if (!publisherLists_.contains(manifest.masterKey))
         return {ListDisposition::Untrusted, {}};
@@ -1366,6 +1407,19 @@ ValidatorList::verify(
     auto const data = base64Decode(blob);
     if (!sig || !xrpl::verify(*signingKey, makeSlice(data), makeSlice(*sig)))
         return {ListDisposition::Invalid, masterPubKey};
+
+    // A publisher who has declared a quantum signing key must also sign the
+    // same list with it. Without this, a quantum capable attacker who has
+    // broken the publisher's classical key could publish a forged trusted
+    // validator list and strip the quantum signature entirely, the same
+    // stripping downgrade the hybrid validator and account paths already
+    // close.
+    if (auto const quantumKey = publisherManifests_.getQuantumSigningKey(masterPubKey))
+    {
+        auto const pqSig = pqSignature ? strUnHex(*pqSignature) : std::nullopt;
+        if (!pqSig || !xrpl::pqVerify(Slice(*quantumKey), makeSlice(data), makeSlice(*pqSig)))
+            return {ListDisposition::Invalid, masterPubKey};
+    }
 
     json::Reader r;
     if (!r.parse(data, list))
