@@ -25,9 +25,16 @@ def build_corpus(
     accounts: list[dict],
     hybrid: bool,
     per_account: int,
+    out_path: str,
     fee: str = FIXED_FEE,
     threads: int = 16,
-) -> list[dict]:
+    batch: int = 20000,
+) -> int:
+    """Sign the corpus and stream it to out_path in round-robin order.
+
+    Signing runs in batches that are written as each completes, so memory stays
+    bounded (a hybrid corpus of millions of blobs is tens of GB) and a failure
+    late in a long signing pass leaves the earlier batches on disk."""
     # Seed each starting sequence from the VALIDATED ledger after convergence.
     # Reading "current" from a single node right after a funding burst returns
     # stale, too-low sequences (the node lags), so blobs sign below the real
@@ -52,7 +59,6 @@ def build_corpus(
         for k in range(per_account)
         for rec in accounts
     ]
-    corpus: list[dict] = [None] * len(tasks)  # type: ignore[list-item]
 
     # Payments go to a random *other* pool account (all funded), mirroring the
     # "payments between N accounts" workload rather than all-to-genesis.
@@ -82,13 +88,20 @@ def build_corpus(
         if hybrid and rec["pq_seed"]:
             params["pq_seed_hex"] = rec["pq_seed"]
         signed = bl.rpc_checked(urls[i % len(urls)], "sign", params, retries=8)
-        corpus[i] = {"account": rec["account"], "seq": seq, "blob": signed["tx_blob"]}
+        return {"account": rec["account"], "seq": seq, "blob": signed["tx_blob"]}
 
-    with ThreadPoolExecutor(max_workers=threads) as ex:
-        for n, _ in enumerate(ex.map(sign_one, range(len(tasks)))):
-            if (n + 1) % 20000 == 0:
-                print(f"  signed {n + 1}/{len(tasks)} txs", flush=True)
-    return corpus
+    written = 0
+    with open(out_path, "w", encoding="utf-8") as f, ThreadPoolExecutor(
+        max_workers=threads
+    ) as ex:
+        for start in range(0, len(tasks), batch):
+            idx = range(start, min(start + batch, len(tasks)))
+            for entry in ex.map(sign_one, idx):  # preserves round-robin order
+                f.write(json.dumps(entry) + "\n")
+                written += 1
+            f.flush()
+            print(f"  signed {written}/{len(tasks)} txs", flush=True)
+    return written
 
 
 def main() -> int:
@@ -116,14 +129,10 @@ def main() -> int:
         f"with {args.threads} threads over {len(urls)} endpoint(s) ...",
         flush=True,
     )
-    corpus = build_corpus(
-        urls, accounts, hybrid, args.per_account, args.fee, args.threads
+    n = build_corpus(
+        urls, accounts, hybrid, args.per_account, args.out, args.fee, args.threads
     )
-
-    with open(args.out, "w", encoding="utf-8") as f:
-        for entry in corpus:
-            f.write(json.dumps(entry) + "\n")
-    print(f"Wrote {len(corpus)} signed blobs to {args.out}", flush=True)
+    print(f"Wrote {n} signed blobs to {args.out}", flush=True)
     return 0
 
 

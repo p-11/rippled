@@ -6,7 +6,7 @@
 #
 # Produces OUT_BASENAME.tar.gz, OUT_BASENAME.SHA256SUMS (one hash per file
 # inside the archive, plus the archive itself) and OUT_BASENAME.MANIFEST.txt.
-# Excluded: the pre-signed corpora (large run inputs, regenerable) and the
+# Excluded: the pre-signed corpora (large run inputs that can be re-signed) and the
 # account secrets; accounts.json is replaced by accounts.public.json holding
 # only addresses and (hybrid) PQ public keys.
 #
@@ -19,8 +19,8 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "${STAGE}"' EXIT
 
 mkdir -p "${STAGE}/results"
-rsync -a --exclude='corpus*.jsonl' --exclude='corpus*.jsonl.gz' --exclude='accounts.json' \
-    "${RES}/" "${STAGE}/results/"
+tar -C "${RES}" --exclude='corpus*.jsonl' --exclude='corpus*.jsonl.gz' \
+    --exclude='accounts.json' -cf - . | tar -C "${STAGE}/results" -xf -
 find "${RES}" -name accounts.json | while read -r a; do
     rel="${a#"${RES}"/}"
     python3 - "${a}" "${STAGE}/results/$(dirname "${rel}")/accounts.public.json" <<'PY'

@@ -17,15 +17,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import bench_lib as bl
 
 # Held constant across configurations. With xrpld's default transaction-queue
-# settings (the mainnet recommended configuration) a high fee keeps the funding
-# bursts in the open ledger instead of the per-account queue.
+# settings (the mainnet recommended configuration) part of each funding burst is
+# queued or rejected while the expected ledger size grows; pay_chain and
+# opt_in_pool re-submit until everything validates.
 FIXED_FEE = "1000000"
 FUND_DROPS = "100000000000"  # 100k XRP per source account
 
 
 def mint_pool(url: str, size: int, hybrid: bool, threads: int = 16) -> list[dict]:
     def one(_i: int) -> dict:
-        ecc = bl.rpc_checked(url, "wallet_propose", {"key_type": "secp256k1"}, retries=5)
+        ecc = bl.rpc_checked(
+            url, "wallet_propose", {"key_type": "secp256k1"}, retries=5
+        )
         rec = {
             "account": ecc["account_id"],
             "secret": ecc["master_seed"],
@@ -33,7 +36,9 @@ def mint_pool(url: str, size: int, hybrid: bool, threads: int = 16) -> list[dict
             "pq_pubkey": None,
         }
         if hybrid:
-            pq = bl.rpc_checked(url, "wallet_propose", {"key_type": "dilithium"}, retries=5)
+            pq = bl.rpc_checked(
+                url, "wallet_propose", {"key_type": "dilithium"}, retries=5
+            )
             rec["pq_seed"] = pq["pq_seed_hex"]
             rec["pq_pubkey"] = pq["public_key_hex"]
         return rec
@@ -49,7 +54,12 @@ def mint_pool(url: str, size: int, hybrid: bool, threads: int = 16) -> list[dict
 
 def validated_seq(url: str, account: str) -> int | None:
     """Validated Sequence, or None if the account is not in the validated ledger."""
-    r = bl.rpc(url, "account_info", {"account": account, "ledger_index": "validated"}, retries=3)
+    r = bl.rpc(
+        url,
+        "account_info",
+        {"account": account, "ledger_index": "validated"},
+        retries=3,
+    )
     if r.get("status") != "success":
         return None
     return int(r["account_data"]["Sequence"])
@@ -62,12 +72,17 @@ def pay_chain(
     payments: list[tuple[str, str]],
     fee: str,
     chunk: int = 200,
-    timeout_s: float = 60.0,
+    timeout_s: float = 30.0,
+    max_stalls: int = 3,
 ) -> None:
     """Submit Payments from one source with explicit, consecutive Sequences,
     `chunk` at a time, waiting for each chunk to validate before the next.
     Anything that did not make it is re-submitted by Sequence (the signature
-    is deterministic, so a resubmit is the same transaction)."""
+    is deterministic, so a resubmit is the same transaction). With xrpld's
+    default queue settings a burst is partly queued or rejected until the
+    expected ledger size grows, so this keeps going while the source's
+    validated Sequence advances and gives up only after `max_stalls` rounds
+    with no progress."""
     seq0 = validated_seq(url, source)
     if seq0 is None:
         raise bl.RpcError(f"source {source} not funded")
@@ -75,7 +90,8 @@ def pay_chain(
         part = payments[start : start + chunk]
         first = seq0 + start
         end = first + len(part)
-        for attempt in range(6):
+        stalls = 0
+        while True:
             cur = validated_seq(url, source) or first
             if cur >= end:
                 break
@@ -105,10 +121,15 @@ def pay_chain(
                 if (validated_seq(url, source) or 0) >= end:
                     break
                 time.sleep(1.0)
-            if (validated_seq(url, source) or 0) >= end:
+            now = validated_seq(url, source) or 0
+            if now >= end:
                 break
-        else:
-            raise bl.RpcError(f"{source}: payments {first}..{end - 1} did not validate")
+            stalls = stalls + 1 if now <= cur else 0
+            if stalls >= max_stalls:
+                raise bl.RpcError(
+                    f"{source}: stuck at Sequence {now}, payments up to {end - 1} "
+                    f"not validating after {max_stalls} rounds without progress"
+                )
 
 
 def fund_pool(
@@ -120,7 +141,8 @@ def fund_pool(
     takes hours; this takes minutes."""
     funders = max(1, min(funders, len(accounts)))
     fund_wallets = [
-        bl.rpc_checked(url, "wallet_propose", {"key_type": "secp256k1"}) for _ in range(funders)
+        bl.rpc_checked(url, "wallet_propose", {"key_type": "secp256k1"})
+        for _ in range(funders)
     ]
     slices = [accounts[i::funders] for i in range(funders)]
     per_funder = [
@@ -184,21 +206,43 @@ def opt_in_pool(url: str, accounts: list[dict], fee: str, threads: int) -> None:
             raise bl.RpcError(f"opt-in {rec['account']}: {eng}")
 
     with ThreadPoolExecutor(max_workers=threads) as ex:
-        for rec, s in zip(accounts, ex.map(lambda r: validated_seq(url, r["account"]), accounts)):
+        for rec, s in zip(
+            accounts, ex.map(lambda r: validated_seq(url, r["account"]), accounts)
+        ):
             rec["_seq"] = s
+
+    def pending(recs: list[dict]) -> list[dict]:
+        with ThreadPoolExecutor(max_workers=threads) as ex:
+            now = list(ex.map(lambda r: validated_seq(url, r["account"]), recs))
+        return [r for r, s in zip(recs, now) if (s or 0) <= r["_seq"]]
+
+    # Submit everything still pending, then let the queue drain (keep waiting
+    # while the done count rises) before re-submitting what was dropped. Stop
+    # only after three rounds that made no progress at all.
     todo = list(accounts)
-    for attempt in range(5):
+    stalls = 0
+    rnd = 0
+    while todo:
+        rnd += 1
+        before = len(todo)
         with ThreadPoolExecutor(max_workers=threads) as ex:
             list(ex.map(submit_one, todo))
-        bl.wait_ledgers(url, 3, timeout_s=120)
-        with ThreadPoolExecutor(max_workers=threads) as ex:
-            now = list(ex.map(lambda r: validated_seq(url, r["account"]), todo))
-        todo = [r for r, s in zip(todo, now) if (s or 0) <= r["_seq"]]
-        print(f"  opt-in round {attempt + 1}: {len(accounts) - len(todo)}/{len(accounts)} done", flush=True)
-        if not todo:
-            break
-    if todo:
-        raise bl.RpcError(f"{len(todo)} accounts failed to opt in")
+        while True:
+            bl.wait_ledgers(url, 3, timeout_s=120)
+            still = pending(todo)
+            drained = len(still) < len(todo)
+            todo = still
+            if not todo or not drained:
+                break
+        print(
+            f"  opt-in round {rnd}: {len(accounts) - len(todo)}/{len(accounts)} done",
+            flush=True,
+        )
+        stalls = stalls + 1 if len(todo) >= before else 0
+        if stalls >= 3:
+            raise bl.RpcError(
+                f"{len(todo)} accounts failed to opt in (no progress in 3 rounds)"
+            )
     for rec in accounts:
         rec.pop("_seq", None)
 
@@ -219,8 +263,15 @@ def main() -> int:
         "--hybrid", action="store_true", help="mint PQ keys and opt accounts in"
     )
     ap.add_argument("--out", default="accounts.json")
-    ap.add_argument("--fee", default=FIXED_FEE, help="fee in drops for setup transactions")
-    ap.add_argument("--funders", type=int, default=0, help="intermediate funders (0 = pool/200, max 100)")
+    ap.add_argument(
+        "--fee", default=FIXED_FEE, help="fee in drops for setup transactions"
+    )
+    ap.add_argument(
+        "--funders",
+        type=int,
+        default=0,
+        help="intermediate funders (0 = pool/200, max 100)",
+    )
     ap.add_argument("--threads", type=int, default=32)
     args = ap.parse_args()
 

@@ -57,7 +57,7 @@ def du_components(container: str, path: str = DB_PATH, timeout: int = 60) -> dic
     store vs. the transaction / ledger databases. {} if unavailable."""
     script = (
         f"cd {path} 2>/dev/null || exit 1; "
-        "for p in nudb *.db *.db-wal *.db-shm; do [ -e \"$p\" ] && du -sb \"$p\"; done; true"
+        'for p in nudb *.db *.db-wal *.db-shm; do [ -e "$p" ] && du -sb "$p"; done; true'
     )
     try:
         r = subprocess.run(

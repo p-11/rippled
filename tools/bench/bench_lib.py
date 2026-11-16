@@ -452,7 +452,8 @@ class ValidatedLedgerRecorder:
     the validators) every poll_s; a ledger's first_seen is the earliest time any
     of them reported it, which approximates when the network validated it to
     within poll_s. A detail thread fetches each ledger once, in order, from
-    `detail_url`. Nothing is skipped when a poller falls behind.
+    `detail_urls` (rotating through them while a node lags, for up to
+    detail_timeout_s). Nothing is skipped when a poller falls behind.
 
     Writes <prefix>.ledgers.jsonl (one row per ledger) and
     <prefix>.ledger_txs.csv.gz (ledger_index,hash for every transaction).
@@ -461,12 +462,16 @@ class ValidatedLedgerRecorder:
     def __init__(
         self,
         header_urls: list[str],
-        detail_url: str,
+        detail_urls: list[str] | str,
         out_prefix: str,
         poll_s: float = 0.1,
+        detail_timeout_s: float = 120.0,
     ):
         self.header_urls = header_urls
-        self.detail_url = detail_url
+        self.detail_urls = (
+            [detail_urls] if isinstance(detail_urls, str) else list(detail_urls)
+        )
+        self.detail_timeout_s = detail_timeout_s
         self.poll_s = poll_s
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -516,7 +521,7 @@ class ValidatedLedgerRecorder:
             self._stop.wait(self.poll_s)
 
     def _detail_loop(self) -> None:
-        r = KeepAliveRpc(self.detail_url, timeout=30.0)
+        conns = [KeepAliveRpc(u, timeout=30.0) for u in self.detail_urls]
         while True:
             with self._cv:
                 while not self._pending and not self._stop.is_set():
@@ -525,14 +530,21 @@ class ValidatedLedgerRecorder:
                     return
                 li = self._pending.pop(0)
             ledger = None
-            for _ in range(20):
+            deadline = time.time() + self.detail_timeout_s
+            attempt = 0
+            # A loaded stock node can lag the validators by several ledgers;
+            # keep asking (rotating nodes) rather than recording a gap.
+            while ledger is None and time.time() < deadline:
+                r = conns[attempt % len(conns)]
+                attempt += 1
                 try:
                     res = r.call(
                         "ledger",
                         {"ledger_index": li, "transactions": True, "expand": False},
                     )
-                    ledger = res.get("ledger")
-                    if ledger:
+                    got = res.get("ledger")
+                    if got and got.get("closed", True) and "transactions" in got:
+                        ledger = got
                         break
                 except Exception:  # noqa: BLE001
                     self.errors += 1
@@ -543,11 +555,15 @@ class ValidatedLedgerRecorder:
                 row = {
                     "ledger_index": li,
                     "first_seen": round(self.first_seen.get(li, float("nan")), 3),
-                    "seen_by": {k: round(v, 3) for k, v in self.seen_by.get(li, {}).items()},
+                    "seen_by": {
+                        k: round(v, 3) for k, v in self.seen_by.get(li, {}).items()
+                    },
                     "coalesced": li in self.coalesced,
                     "txn_count": len(hashes) if ledger else None,
                     "close_time": (ledger or {}).get("close_time"),
-                    "close_time_resolution": (ledger or {}).get("close_time_resolution"),
+                    "close_time_resolution": (ledger or {}).get(
+                        "close_time_resolution"
+                    ),
                     "fetched": ledger is not None,
                 }
                 self.details[li] = row
@@ -578,7 +594,9 @@ class ValidatedLedgerRecorder:
         with self._cv:
             while True:
                 missing = [
-                    li for li in self.first_seen if li <= upto_index and li not in self.details
+                    li
+                    for li in self.first_seen
+                    if li <= upto_index and li not in self.details
                 ]
                 if not missing:
                     return True
@@ -604,6 +622,7 @@ class ValidatedLedgerRecorder:
         with self._cv:
             counts = [self.details.get(li, {}).get("txn_count") for li, _ in inside]
         known = [c for c in counts if c is not None]
+        span = (times[-1] - times[0]) if len(times) >= 2 else 0.0
         return {
             "ledgers": len(inside),
             "first_index": inside[0][0] if inside else None,
@@ -612,6 +631,8 @@ class ValidatedLedgerRecorder:
             "open_gap_s": round(open_gap, 3),
             "max_interval_s": round(max(intervals + [open_gap]), 3),
             "txn_total": sum(known),
+            "span_s": round(span, 3),
+            "ledger_tps": round(sum(known) / span, 1) if span > 0 else 0.0,
             "txn_per_ledger": known,
             "missing_details": len(counts) - len(known),
         }

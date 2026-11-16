@@ -32,7 +32,9 @@ def main() -> int:
     args = ap.parse_args()
 
     groups: dict[str, list] = defaultdict(list)
-    for path in sorted(glob.glob(os.path.join(args.results, "*", "steady.summary.json"))):
+    for path in sorted(
+        glob.glob(os.path.join(args.results, "*", "steady.summary.json"))
+    ):
         label = os.path.basename(os.path.dirname(path))
         m = re.match(r"(.+)-r(\d+)$", label)
         cfg, rep = (m.group(1), int(m.group(2))) if m else (label, 1)
@@ -52,7 +54,9 @@ def main() -> int:
         caps = [(sm.get("capacity") or {}).get("rate") for _, sm in reps]
         tps = [(sm.get("capacity") or {}).get("ledger_tps") for _, sm in reps]
         txl = [(sm.get("capacity") or {}).get("txn_per_ledger_mean") for _, sm in reps]
-        step = next((sm.get("rate_step") for _, sm in reps if sm.get("rate_step")), None)
+        step = next(
+            (sm.get("rate_step") for _, sm in reps if sm.get("rate_step")), None
+        )
         known = [c for c in caps if c is not None]
         agree = (
             "n/a"

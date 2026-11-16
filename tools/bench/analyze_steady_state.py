@@ -19,8 +19,13 @@ Per load level, over its steady-state measurement window only:
   queue         expected ledger size, open-ledger size, queue size, open-ledger fee
 
 A level passes when every validated-ledger interval in the window is at most
-max_interval, AND the generator delivered the target (otherwise the level is
-"generator-limited" and says nothing about the network). Capacity is the highest
+max_interval AND the ledgers carried at least carried_min of the offered rate
+(so load shed by a full queue or fee escalation while the cadence holds is not
+counted as capacity), AND the generator delivered the target (otherwise the
+level is "generator-limited" and says nothing about the network). A level that
+misses the cadence is FAIL whether or not the generator kept up, since the
+network failed at no more than the target load. The two
+network conditions are reported separately. Capacity is the highest
 level such that it and every level below it passed.
 
 Usage: analyze_steady_state.py PREFIX   (writes PREFIX.summary.json, PREFIX.levels.csv)
@@ -67,15 +72,23 @@ def ledger_window(ledgers, t0, t1):
     intervals = [b - a for a, b in zip(times, times[1:]) if b > a]
     open_gap = t1 - times[-1] if times else t1 - t0
     counts = [c for _, _, c in inside if c is not None]
+    # Throughput over the span the counted ledgers cover (from the last ledger
+    # before the window to the last one inside), not the nominal window length:
+    # that would be off by up to one ledger's worth of transactions.
+    span = (times[-1] - times[0]) if len(times) >= 2 else 0.0
     return {
         "ledgers": len(inside),
         "first_index": inside[0][1] if inside else None,
         "last_index": inside[-1][1] if inside else None,
         "max_interval_s": round(max(intervals + [open_gap]), 3),
         "p95_interval_s": pct(intervals, 95),
-        "mean_interval_s": round(sum(intervals) / len(intervals), 3) if intervals else None,
+        "mean_interval_s": (
+            round(sum(intervals) / len(intervals), 3) if intervals else None
+        ),
         "open_gap_s": round(open_gap, 3),
         "txn_total": sum(counts),
+        "span_s": round(span, 3),
+        "ledger_tps": round(sum(counts) / span, 1) if span > 0 else 0.0,
         "txn_per_ledger_mean": round(sum(counts) / len(counts), 1) if counts else 0.0,
         "txn_per_ledger_min": min(counts) if counts else None,
         "txn_per_ledger_max": max(counts) if counts else None,
@@ -137,11 +150,18 @@ def validator_stats(by_node):
         # one converge time per closed ledger
         per_ledger = {}
         for r in rows:
-            if r.get("validated_seq") is not None and r.get("converge_time_s") is not None:
+            if (
+                r.get("validated_seq") is not None
+                and r.get("converge_time_s") is not None
+            ):
                 per_ledger[r["validated_seq"]] = r["converge_time_s"]
         conv = list(per_ledger.values())
         backlog = [r["job_backlog"] for r in rows if r.get("job_backlog") is not None]
-        lf = [r["load_factor"] for r in rows if isinstance(r.get("load_factor"), (int, float))]
+        lf = [
+            r["load_factor"]
+            for r in rows
+            if isinstance(r.get("load_factor"), (int, float))
+        ]
         states = Counter(r.get("server_state") for r in rows)
         out[node] = {
             "samples": len(rows),
@@ -150,7 +170,9 @@ def validator_stats(by_node):
             "job_backlog_max": max(backlog) if backlog else None,
             "job_backlog_p95": pct(backlog, 95),
             "jq_trans_overflow_delta": delta(rows, "jq_trans_overflow"),
-            "peer_disconnects_resources_delta": delta(rows, "peer_disconnects_resources"),
+            "peer_disconnects_resources_delta": delta(
+                rows, "peer_disconnects_resources"
+            ),
             "load_factor_max": max(lf) if lf else None,
             "server_states": dict(states),
         }
@@ -160,6 +182,7 @@ def validator_stats(by_node):
 def fee_stats(by_node):
     out = {}
     for node, rows in sorted(by_node.items()):
+
         def col(k):
             return [r[k] for r in rows if r.get(k) is not None]
 
@@ -205,6 +228,7 @@ def analyze(prefix: str) -> dict:
     gen_delivery_min = cfg["gen_delivery_min"]
     gen_late_max = cfg["gen_late_max"]
     gen_lag_max = cfg["gen_lag_max"]
+    carried_min = cfg.get("carried_min", 0.0)
 
     ledgers = read_jsonl(f"{prefix}.ledgers.jsonl")
     ledger_seen = {r["ledger_index"]: r.get("first_seen") for r in ledgers}
@@ -225,7 +249,9 @@ def analyze(prefix: str) -> dict:
     except FileNotFoundError:
         online = {}
 
-    last_ledger_t = max((r["first_seen"] for r in ledgers if r.get("first_seen")), default=0)
+    last_ledger_t = max(
+        (r["first_seen"] for r in ledgers if r.get("first_seen")), default=0
+    )
     levels = []
     for lv in sched["levels"]:
         i = lv["level"]
@@ -254,11 +280,29 @@ def analyze(prefix: str) -> dict:
         delivery = len(sent) / target if target else 0.0
         late_frac = late / len(sent) if sent else 1.0
         exhausted = engines.get("exhausted", 0) > 0
-        gen_ok = delivery >= gen_delivery_min and late_frac <= gen_late_max and not exhausted
+        gen_ok = (
+            delivery >= gen_delivery_min and late_frac <= gen_late_max and not exhausted
+        )
 
         lw = ledger_window(ledgers, m0, m1)
-        net_ok = lw["ledgers"] > 0 and lw["max_interval_s"] <= max_interval
-        vs = window_samples([s for s in sinfo if s["node"].startswith("validator")], m0, m1)
+        ledger_tps = lw["ledger_tps"]
+        interval_ok = lw["ledgers"] > 0 and lw["max_interval_s"] <= max_interval
+        carried_ok = ledger_tps >= carried_min * lv["rate"]
+        net_ok = interval_ok and carried_ok
+        # Missed cadence is a network FAIL even if the generator fell behind
+        # (the network failed at no more than the target load); otherwise an
+        # under-delivering generator makes the level uninformative.
+        if not interval_ok:
+            verdict = "FAIL"
+        elif not gen_ok:
+            verdict = "GENERATOR-LIMITED"
+        elif not carried_ok:
+            verdict = "FAIL (load not carried)"
+        else:
+            verdict = "PASS"
+        vs = window_samples(
+            [s for s in sinfo if s["node"].startswith("validator")], m0, m1
+        )
         ss = window_samples([s for s in sinfo if s["node"].startswith("stock")], m0, m1)
         fs = window_samples(fees, m0, m1)
 
@@ -267,10 +311,15 @@ def analyze(prefix: str) -> dict:
                 "level": i,
                 "rate": lv["rate"],
                 "window": [round(m0, 3), round(m1, 3)],
-                "verdict": ("PASS" if net_ok else "FAIL") if gen_ok else "GENERATOR-LIMITED",
+                "verdict": verdict,
                 "network_pass": net_ok,
+                "interval_ok": interval_ok,
+                "carried_ok": carried_ok,
+                "carried_frac": (
+                    round(ledger_tps / lv["rate"], 4) if lv["rate"] else None
+                ),
                 "generator_ok": gen_ok,
-                "ledger": {**lw, "ledger_tps": round(lw["txn_total"] / measure, 1)},
+                "ledger": lw,
                 "generator": {
                     "target": target,
                     "sent": len(sent),
@@ -288,9 +337,13 @@ def analyze(prefix: str) -> dict:
                 "inclusion": {
                     "submitted_with_hash": len(hashed),
                     "validated_in_window": in_win,
-                    "validated_in_window_frac": round(in_win / len(hashed), 4) if hashed else None,
+                    "validated_in_window_frac": (
+                        round(in_win / len(hashed), 4) if hashed else None
+                    ),
                     "validated_with_drain": in_drain,
-                    "validated_with_drain_frac": round(in_drain / len(hashed), 4) if hashed else None,
+                    "validated_with_drain_frac": (
+                        round(in_drain / len(hashed), 4) if hashed else None
+                    ),
                     "drain_s": drain,
                     "confirm_ms_p50": pct(conf_lat, 50),
                     "confirm_ms_p95": pct(conf_lat, 95),
@@ -311,36 +364,67 @@ def analyze(prefix: str) -> dict:
     summary = {
         "prefix": prefix,
         "criterion": f"every validated-ledger interval <= {max_interval}s over a "
-        f"{measure:.0f}s steady-state window",
-        "capacity": None
-        if capacity is None
-        else {
-            "rate": capacity["rate"],
-            "ledger_tps": capacity["ledger"]["ledger_tps"],
-            "txn_per_ledger_mean": capacity["ledger"]["txn_per_ledger_mean"],
-            "max_interval_s": capacity["ledger"]["max_interval_s"],
-        },
+        f"{measure:.0f}s steady-state window, with the ledgers carrying >= "
+        f"{carried_min:.0%} of the offered rate",
+        "capacity": (
+            None
+            if capacity is None
+            else {
+                "rate": capacity["rate"],
+                "ledger_tps": capacity["ledger"]["ledger_tps"],
+                "txn_per_ledger_mean": capacity["ledger"]["txn_per_ledger_mean"],
+                "max_interval_s": capacity["ledger"]["max_interval_s"],
+            }
+        ),
         "first_failure": next(
-            ({"rate": r["rate"], "verdict": r["verdict"]} for r in levels if r["verdict"] != "PASS"),
+            (
+                {"rate": r["rate"], "verdict": r["verdict"]}
+                for r in levels
+                if r["verdict"] != "PASS"
+            ),
             None,
         ),
-        "rate_step": (sched["levels"][1]["rate"] - sched["levels"][0]["rate"])
-        if len(sched["levels"]) > 1
-        else None,
-        "stop_reason": (json.load(open(f"{prefix}.online.json")) or {}).get("stop_reason")
-        if online
-        else None,
+        "rate_step": (
+            (sched["levels"][1]["rate"] - sched["levels"][0]["rate"])
+            if len(sched["levels"]) > 1
+            else None
+        ),
+        "stop_reason": (
+            (json.load(open(f"{prefix}.online.json")) or {}).get("stop_reason")
+            if online
+            else None
+        ),
         "levels": levels,
     }
     with open(f"{prefix}.summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     cols = [
-        "rate", "verdict", "max_interval_s", "p95_interval_s", "ledgers", "txn_per_ledger_mean",
-        "ledger_tps", "sent", "target", "delivery", "send_lag_p99_s", "submit_rpc_ms_p99",
-        "gen_cpu_max_pct", "tesSUCCESS", "terQUEUED", "other_results", "validated_in_window_frac",
-        "validated_with_drain_frac", "val_converge_max_s", "val_backlog_max", "val_jq_overflow",
-        "expected_ledger_size_max", "queue_size_max",
+        "rate",
+        "verdict",
+        "interval_ok",
+        "carried_frac",
+        "max_interval_s",
+        "p95_interval_s",
+        "ledgers",
+        "txn_per_ledger_mean",
+        "ledger_tps",
+        "sent",
+        "target",
+        "delivery",
+        "send_lag_p99_s",
+        "submit_rpc_ms_p99",
+        "gen_cpu_max_pct",
+        "tesSUCCESS",
+        "terQUEUED",
+        "other_results",
+        "validated_in_window_frac",
+        "validated_with_drain_frac",
+        "val_converge_max_s",
+        "val_backlog_max",
+        "val_jq_overflow",
+        "expected_ledger_size_max",
+        "queue_size_max",
     ]
     with open(f"{prefix}.levels.csv", "w", newline="") as f:
         w = csv.writer(f)
@@ -356,17 +440,32 @@ def analyze(prefix: str) -> dict:
             q = r["queue"].values()
             w.writerow(
                 [
-                    r["rate"], r["verdict"], r["ledger"]["max_interval_s"],
-                    r["ledger"]["p95_interval_s"], r["ledger"]["ledgers"],
-                    r["ledger"]["txn_per_ledger_mean"], r["ledger"]["ledger_tps"],
-                    r["generator"]["sent"], r["generator"]["target"], r["generator"]["delivery"],
-                    r["generator"]["send_lag_p99_s"], r["generator"]["submit_rpc_ms_p99"],
+                    r["rate"],
+                    r["verdict"],
+                    r["interval_ok"],
+                    r["carried_frac"],
+                    r["ledger"]["max_interval_s"],
+                    r["ledger"]["p95_interval_s"],
+                    r["ledger"]["ledgers"],
+                    r["ledger"]["txn_per_ledger_mean"],
+                    r["ledger"]["ledger_tps"],
+                    r["generator"]["sent"],
+                    r["generator"]["target"],
+                    r["generator"]["delivery"],
+                    r["generator"]["send_lag_p99_s"],
+                    r["generator"]["submit_rpc_ms_p99"],
                     r["generator"]["cpu"].get("per_proc_max_pct", ""),
-                    eng.get("tesSUCCESS", 0), eng.get("terQUEUED", 0),
-                    sum(v for k, v in eng.items() if k not in ("tesSUCCESS", "terQUEUED")),
+                    eng.get("tesSUCCESS", 0),
+                    eng.get("terQUEUED", 0),
+                    sum(
+                        v
+                        for k, v in eng.items()
+                        if k not in ("tesSUCCESS", "terQUEUED")
+                    ),
                     r["inclusion"]["validated_in_window_frac"],
                     r["inclusion"]["validated_with_drain_frac"],
-                    vmax("converge_time_max_s"), vmax("job_backlog_max"),
+                    vmax("converge_time_max_s"),
+                    vmax("job_backlog_max"),
                     vmax("jq_trans_overflow_delta"),
                     max((x["expected_ledger_size_max"] or 0 for x in q), default=""),
                     max((x["current_queue_size_max"] or 0 for x in q), default=""),

@@ -125,7 +125,9 @@ def load_shard(corpus_path, k, nprocs):
     return accts, by_acct, order
 
 
-def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, sched_ready, sched_t0):
+def generator_proc(
+    k, args, rates, urls, stop_ev, counters, exhausted, ready_q, sched_ready, sched_t0
+):
     nprocs = args.procs
     accts, by_acct, order = load_shard(args.corpus, k, nprocs)
     cursor = {a: 0 for a in accts}
@@ -149,7 +151,9 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
     # The controller fixes t0 once every shard is loaded, so loading time is
     # never part of the schedule.
     sched_ready.wait()
-    schedule = build_schedule(rates, args.ramp, args.settle, args.measure, sched_t0.value)
+    schedule = build_schedule(
+        rates, args.ramp, args.settle, args.measure, sched_t0.value
+    )
 
     tokens: queue.Queue = queue.Queue(maxsize=max(64, args.threads * 4))
     rows: collections.deque = collections.deque()
@@ -193,7 +197,19 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
             a, blob = next_blob()
             if blob is None:
                 exhausted.value = 1
-                rows.append((deadline, time.time(), time.time(), lvl, ph, -1, -1, "exhausted", ""))
+                rows.append(
+                    (
+                        deadline,
+                        time.time(),
+                        time.time(),
+                        lvl,
+                        ph,
+                        -1,
+                        -1,
+                        "exhausted",
+                        "",
+                    )
+                )
                 continue
             ui = acct_url[a]
             c = conns.get(ui)
@@ -202,7 +218,7 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
             t_sent = time.time()
             try:
                 res = c.call("submit", {"tx_blob": blob})
-                eng = res.get("engine_result") or res.get("error") or "noresult"
+                eng = res.get("engine_result") or res.get("error") or "no_result"
                 h = (res.get("tx_json") or {}).get("hash", "")
             except Exception:  # noqa: BLE001
                 eng, h = "rpc_error", ""
@@ -217,21 +233,36 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
         with gzip.open(path, "wt", newline="") as f:
             w = csv.writer(f)
             w.writerow(
-                ["deadline", "sent", "done", "level", "phase", "account", "url", "engine", "hash"]
+                [
+                    "deadline",
+                    "sent",
+                    "done",
+                    "level",
+                    "phase",
+                    "account",
+                    "url",
+                    "engine",
+                    "hash",
+                ]
             )
             while True:
                 batch = []
                 while rows:
                     batch.append(rows.popleft())
                 for d, s, dn, lvl, ph, a, ui, eng, h in batch:
-                    w.writerow([f"{d:.4f}", f"{s:.4f}", f"{dn:.4f}", lvl, ph, a, ui, eng, h])
+                    w.writerow(
+                        [f"{d:.4f}", f"{s:.4f}", f"{dn:.4f}", lvl, ph, a, ui, eng, h]
+                    )
                     if ph == 2 and lvl >= 0:
                         base = lvl * 4
                         with counters.get_lock():
+                            if eng == "exhausted":  # nothing was sent
+                                counters[base + 2] += 1
+                                continue
                             counters[base] += 1
                             if s - d > lag_late:
                                 counters[base + 1] += 1
-                            if eng in ("rpc_error", "exhausted"):
+                            if eng == "rpc_error":
                                 counters[base + 2] += 1
                 if stop_writer.is_set() and not rows:
                     return
@@ -247,7 +278,9 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
                 cur = resource.getrusage(resource.RUSAGE_SELF)
                 now = time.time()
                 used = (cur.ru_utime - last.ru_utime) + (cur.ru_stime - last.ru_stime)
-                f.write(f"{now:.3f},{k},{100.0 * used / (now - lt):.1f},{tokens.qsize()}\n")
+                f.write(
+                    f"{now:.3f},{k},{100.0 * used / (now - lt):.1f},{tokens.qsize()}\n"
+                )
                 f.flush()
                 last, lt = cur, now
 
@@ -257,7 +290,9 @@ def generator_proc(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, 
     ct.start()
     pt = threading.Thread(target=producer, daemon=True)
     pt.start()
-    workers = [threading.Thread(target=worker, daemon=True) for _ in range(args.threads)]
+    workers = [
+        threading.Thread(target=worker, daemon=True) for _ in range(args.threads)
+    ]
     for th in workers:
         th.start()
     pt.join()
@@ -284,7 +319,9 @@ def wait_ready(url, ledgers=3, timeout_s=120.0):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--urls", default="http://127.0.0.1:5005", help="submit endpoints (stock nodes)")
+    ap.add_argument(
+        "--urls", default="http://127.0.0.1:5005", help="submit endpoints (stock nodes)"
+    )
     ap.add_argument(
         "--validator-urls",
         default="",
@@ -293,28 +330,87 @@ def main() -> int:
     )
     ap.add_argument("--corpus", default="corpus.jsonl")
     ap.add_argument("--out", default="steady")
-    ap.add_argument("--rates", default="", help="explicit comma list; overrides start/step/cap")
+    ap.add_argument(
+        "--rates", default="", help="explicit comma list; overrides start/step/cap"
+    )
     ap.add_argument("--rate-start", type=int, default=250)
     ap.add_argument("--rate-step", type=int, default=250)
     ap.add_argument("--rate-cap", type=int, default=4000)
-    ap.add_argument("--ramp", type=float, default=30.0, help="seconds to ramp to each level")
-    ap.add_argument("--settle", type=float, default=60.0, help="unscored steady seconds before the window")
-    ap.add_argument("--measure", type=float, default=120.0, help="scored steady-state window, seconds")
-    ap.add_argument("--drain", type=float, default=30.0, help="seconds to keep recording after the last level")
-    ap.add_argument("--max-interval", type=float, default=5.0, help="pass if every validated-ledger interval <= this")
-    ap.add_argument("--fails-to-stop", type=int, default=1, help="stop after this many failing levels")
+    ap.add_argument(
+        "--ramp", type=float, default=30.0, help="seconds to ramp to each level"
+    )
+    ap.add_argument(
+        "--settle",
+        type=float,
+        default=60.0,
+        help="steady seconds before the window, not scored",
+    )
+    ap.add_argument(
+        "--measure",
+        type=float,
+        default=120.0,
+        help="scored steady-state window, seconds",
+    )
+    ap.add_argument(
+        "--drain",
+        type=float,
+        default=30.0,
+        help="seconds to keep recording after the last level",
+    )
+    ap.add_argument(
+        "--max-interval",
+        type=float,
+        default=5.0,
+        help="pass if every validated-ledger interval <= this",
+    )
+    ap.add_argument(
+        "--carried-min",
+        type=float,
+        default=0.95,
+        help="pass also requires the ledgers to carry this fraction of the offered "
+        "rate, so a level whose excess load is shed (queue full, fee escalation) "
+        "while the cadence holds is not counted as capacity",
+    )
+    ap.add_argument(
+        "--fails-to-stop",
+        type=int,
+        default=1,
+        help="stop after this many failing levels",
+    )
     ap.add_argument("--procs", type=int, default=4, help="generator processes")
-    ap.add_argument("--threads", type=int, default=48, help="submit threads per process")
+    ap.add_argument(
+        "--threads",
+        type=int,
+        default=32,
+        help="submit threads per process; procs x threads caps submits in flight",
+    )
     ap.add_argument("--submit-timeout", type=float, default=15.0)
-    ap.add_argument("--gen-lag-max", type=float, default=1.0, help="a submit later than this vs schedule is 'late'")
-    ap.add_argument("--gen-delivery-min", type=float, default=0.98, help="min sent/target in the window")
-    ap.add_argument("--gen-late-max", type=float, default=0.01, help="max fraction of late submits in the window")
+    ap.add_argument(
+        "--gen-lag-max",
+        type=float,
+        default=1.0,
+        help="a submit later than this vs schedule is 'late'",
+    )
+    ap.add_argument(
+        "--gen-delivery-min",
+        type=float,
+        default=0.98,
+        help="min sent/target in the window",
+    )
+    ap.add_argument(
+        "--gen-late-max",
+        type=float,
+        default=0.01,
+        help="max fraction of late submits in the window",
+    )
     ap.add_argument("--start-delay", type=float, default=5.0)
-    ap.add_argument("--poll", type=float, default=0.1, help="validated-ledger poll period, seconds")
+    ap.add_argument(
+        "--poll", type=float, default=0.1, help="validated-ledger poll period, seconds"
+    )
     args = ap.parse_args()
 
     urls = [u for u in args.urls.split(",") if u]
-    vurls = [u for u in args.validator_urls.split(",") if u] or urls
+    validator_urls = [u for u in args.validator_urls.split(",") if u] or urls
     if args.rates:
         rates = [int(x) for x in args.rates.split(",") if x]
     else:
@@ -323,15 +419,24 @@ def main() -> int:
         print("no rate levels", file=sys.stderr)
         return 1
 
-    names = {f"validator-{i + 1}": u for i, u in enumerate(vurls)} if args.validator_urls else {}
+    names = (
+        {f"validator-{i + 1}": u for i, u in enumerate(validator_urls)}
+        if args.validator_urls
+        else {}
+    )
     names.update({f"stock-{i + 1}": u for i, u in enumerate(urls)})
 
-    print(f"Waiting for {len(vurls)} validator endpoint(s) to close ledgers ...", flush=True)
-    wait_ready(vurls[0])
+    print(
+        f"Waiting for {len(validator_urls)} validator endpoint(s) to close ledgers ...",
+        flush=True,
+    )
+    wait_ready(validator_urls[0])
 
-    rec = bl.ValidatedLedgerRecorder(vurls, urls[0], args.out, poll_s=args.poll)
+    rec = bl.ValidatedLedgerRecorder(validator_urls, urls, args.out, poll_s=args.poll)
     sinfo = bl.ServerInfoSampler(names, f"{args.out}.server_info.jsonl", period_s=1.0)
-    fee = bl.FeeQueueSampler({f"stock-{i + 1}": u for i, u in enumerate(urls)}, f"{args.out}.fee.jsonl")
+    fee = bl.FeeQueueSampler(
+        {f"stock-{i + 1}": u for i, u in enumerate(urls)}, f"{args.out}.fee.jsonl"
+    )
     rec.start()
     sinfo.start()
     fee.start()
@@ -345,12 +450,25 @@ def main() -> int:
     need = corpus_needed(rates, args.ramp, args.settle, args.measure)
     sched_ready = ctx.Event()
     sched_t0 = ctx.Value("d", 0.0)
-    print(f"Loading corpus shards into {args.procs} generator process(es) ...", flush=True)
+    print(
+        f"Loading corpus shards into {args.procs} generator process(es) ...", flush=True
+    )
     procs = []
     for k in range(args.procs):
         p = ctx.Process(
             target=generator_proc,
-            args=(k, args, rates, urls, stop_ev, counters, exhausted, ready_q, sched_ready, sched_t0),
+            args=(
+                k,
+                args,
+                rates,
+                urls,
+                stop_ev,
+                counters,
+                exhausted,
+                ready_q,
+                sched_ready,
+                sched_t0,
+            ),
             daemon=True,
         )
         p.start()
@@ -390,7 +508,7 @@ def main() -> int:
                 "config": vars(args),
                 "accounts": n_accts,
                 "blobs": n_blobs,
-                "validator_urls": vurls,
+                "validator_urls": validator_urls,
                 "submit_urls": urls,
             },
             f,
@@ -402,7 +520,9 @@ def main() -> int:
     stop_reason = "completed all levels"
     for lv in schedule:
         m0, m1 = lv["measure"]
-        while time.time() < m1 + 1.0:
+        # Submits sent inside the window are counted when they complete, so wait
+        # out the submit timeout before reading the generator counters.
+        while time.time() < m1 + args.submit_timeout + 1.0:
             time.sleep(0.2)
         win = rec.window(m0, m1)
         base = lv["level"] * 4
@@ -416,17 +536,23 @@ def main() -> int:
             and late_frac <= args.gen_late_max
             and not exhausted.value
         )
-        net_ok = win["ledgers"] > 0 and win["max_interval_s"] <= args.max_interval
-        ledger_tps = win["txn_total"] / args.measure
+        ledger_tps = win["ledger_tps"]
+        interval_ok = win["ledgers"] > 0 and win["max_interval_s"] <= args.max_interval
+        carried_ok = ledger_tps >= args.carried_min * lv["rate"]
+        net_ok = interval_ok and carried_ok
         row = {
             "level": lv["level"],
             "rate": lv["rate"],
             "network_pass": net_ok,
+            "interval_ok": interval_ok,
+            "carried_ok": carried_ok,
             "generator_ok": gen_ok,
             "max_interval_s": win["max_interval_s"],
             "ledgers": win["ledgers"],
             "ledger_tps": round(ledger_tps, 1),
-            "txn_per_ledger_mean": round(win["txn_total"] / win["ledgers"], 1) if win["ledgers"] else 0,
+            "txn_per_ledger_mean": (
+                round(win["txn_total"] / win["ledgers"], 1) if win["ledgers"] else 0
+            ),
             "sent": sent,
             "target": target,
             "delivery": round(delivery, 4),
@@ -435,16 +561,25 @@ def main() -> int:
             "corpus_exhausted": bool(exhausted.value),
         }
         online.append(row)
-        verdict = "PASS" if net_ok else "FAIL"
-        if not gen_ok:
+        # A missed cadence is a network failure even if the generator fell
+        # behind: the network could not hold 5 s at a load no higher than the
+        # target. Only when the cadence held does generator delivery decide
+        # whether the level says anything.
+        if not interval_ok:
+            verdict = "FAIL"
+        elif not gen_ok:
             verdict = "INVALID (generator did not deliver the target)"
+        elif not carried_ok:
+            verdict = "FAIL (load not carried)"
+        else:
+            verdict = "PASS"
         print(
             f"level {lv['rate']:>5} tx/s: {verdict:<5} max_interval={win['max_interval_s']:.2f}s "
             f"ledgers={win['ledgers']} ledger_tps={ledger_tps:.0f} "
             f"tx/ledger={row['txn_per_ledger_mean']} sent/target={delivery:.3f} late={late_frac:.3%}",
             flush=True,
         )
-        if not gen_ok:
+        if verdict.startswith("INVALID"):
             stop_reason = f"generator-limited at {lv['rate']} tx/s"
             break
         if not net_ok:
@@ -454,12 +589,18 @@ def main() -> int:
                 break
 
     stop_ev.set()
-    print(f"Stopping load ({stop_reason}); recording {args.drain:.0f}s drain ...", flush=True)
+    print(
+        f"Stopping load ({stop_reason}); recording {args.drain:.0f}s drain ...",
+        flush=True,
+    )
     for p in procs:
         p.join(timeout=args.submit_timeout + 60)
     hung = [i for i, p in enumerate(procs) if p.is_alive()]
     if hung:
-        print(f"WARNING: generator process(es) {hung} did not exit; their submit logs may be truncated", flush=True)
+        print(
+            f"WARNING: generator process(es) {hung} did not exit; their submit logs may be truncated",
+            flush=True,
+        )
         for i in hung:
             procs[i].terminate()
     time.sleep(args.drain)

@@ -235,7 +235,6 @@ def resource_table(monitor: dict[str, dict[str, list[float]]]) -> str:
     )
 
 
-
 def steady_section(prefix: str) -> list[str]:
     """Steady-state capacity: highest load at which every validated-ledger
     interval in the measurement window stayed within the limit."""
@@ -262,12 +261,20 @@ def steady_section(prefix: str) -> list[str]:
         g, lg, inc = r["generator"], r["ledger"], r["inclusion"]
         eng = r["engine_results"]
         vals = list(r["validators"].values())
-        conv = [v["converge_time_max_s"] for v in vals if v.get("converge_time_max_s") is not None]
-        back = [v["job_backlog_max"] for v in vals if v.get("job_backlog_max") is not None]
+        conv = [
+            v["converge_time_max_s"]
+            for v in vals
+            if v.get("converge_time_max_s") is not None
+        ]
+        back = [
+            v["job_backlog_max"] for v in vals if v.get("job_backlog_max") is not None
+        ]
         rows.append(
             [
                 r["rate"],
                 r["verdict"],
+                "yes" if r.get("interval_ok", r["network_pass"]) else "no",
+                r.get("carried_frac", "-"),
                 lg["max_interval_s"],
                 lg["txn_per_ledger_mean"],
                 lg["ledger_tps"],
@@ -287,22 +294,38 @@ def steady_section(prefix: str) -> list[str]:
     out.append(
         md_table(
             [
-                "rate", "verdict", "max_interval_s", "tx/ledger", "ledger_tps",
-                "sent/target", "send_lag_p99_s", "submit_ms_p99", "tesSUCCESS",
-                "terQUEUED", "other", "valid_in_window", "valid_w_drain",
-                "val_round_max_s", "val_backlog_max",
+                "rate",
+                "verdict",
+                "interval_ok",
+                "carried",
+                "max_interval_s",
+                "tx/ledger",
+                "ledger_tps",
+                "sent/target",
+                "send_lag_p99_s",
+                "submit_ms_p99",
+                "tesSUCCESS",
+                "terQUEUED",
+                "other",
+                "valid_in_window",
+                "valid_w_drain",
+                "val_round_max_s",
+                "val_backlog_max",
             ],
             rows,
         )
     )
     out.append(
         "\n_Only the steady-state window of each level is scored. Throughput is "
-        "read from the validated ledgers. A level is GENERATOR-LIMITED when the "
+        "read from the validated ledgers. `interval_ok` is the 5 s cadence criterion "
+        "alone; `carried` is ledger throughput / offered rate. A level passes only "
+        "with both. A level is GENERATOR-LIMITED when the "
         "load generator did not deliver its target rate on schedule; such a level "
         "says nothing about the network. Raw per-submit, per-ledger, validator and "
         "queue samples are in the run's raw/ directory._\n"
     )
     return out
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -318,7 +341,9 @@ def main() -> int:
         default=None,
         help="steady_state_driver --out prefix; renders the steady-state section",
     )
-    ap.add_argument("--storage-md", default=None, help="storage_breakdown.py OUT.md to include")
+    ap.add_argument(
+        "--storage-md", default=None, help="storage_breakdown.py OUT.md to include"
+    )
     ap.add_argument("--out", default="report.md")
     args = ap.parse_args()
 

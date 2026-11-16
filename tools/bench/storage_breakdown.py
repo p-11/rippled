@@ -29,6 +29,8 @@ Usage:
 
 from __future__ import annotations
 
+# cspell:ignore dbstat pgsize
+
 import argparse
 import gzip
 import json
@@ -89,7 +91,12 @@ def sqlite_blob_bytes(container, workdir):
     for name in ("transaction.db", "transaction.db-wal", "transaction.db-shm"):
         try:
             r = subprocess.run(
-                ["docker", "cp", f"{container}:{DB_DIR}/{name}", os.path.join(workdir, name)],
+                [
+                    "docker",
+                    "cp",
+                    f"{container}:{DB_DIR}/{name}",
+                    os.path.join(workdir, name),
+                ],
                 capture_output=True,
                 timeout=600,
             )
@@ -102,13 +109,18 @@ def sqlite_blob_bytes(container, workdir):
     con = sqlite3.connect(os.path.join(workdir, "transaction.db"))
     out = {}
     try:
-        tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        tables = [
+            r[0]
+            for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        ]
         for t in tables:
             cols = [r[1] for r in con.execute(f"PRAGMA table_info('{t}')")]
             if not cols:
                 continue
-            expr = " + ".join(f"IFNULL(LENGTH(\"{c}\"),0)" for c in cols)
-            rows, data = con.execute(f"SELECT COUNT(*), SUM({expr}) FROM \"{t}\"").fetchone()
+            expr = " + ".join(f'COALESCE(LENGTH("{c}"),0)' for c in cols)
+            rows, data = con.execute(
+                f'SELECT COUNT(*), SUM({expr}) FROM "{t}"'
+            ).fetchone()
             out[t] = {"rows": rows, "column_bytes": data or 0}
         page_size = con.execute("PRAGMA page_size").fetchone()[0]
         page_count = con.execute("PRAGMA page_count").fetchone()[0]
@@ -144,12 +156,25 @@ def main() -> int:
     n_tx = txs_between(args.prefix, before.get("t", 0), after.get("t", 1e18))
 
     hashes = sample_hashes(args.prefix, args.sample)
+    if not hashes:
+        print("WARNING: no transactions recorded in the run; tx/meta sizes unavailable")
     tx_sizes, meta_sizes = [], []
     for h in hashes:
-        r = bl.rpc(args.url, "tx", {"transaction": h, "binary": True}, retries=3)
-        if r.get("status") == "success" and r.get("tx_blob"):
-            tx_sizes.append(len(r["tx_blob"]) // 2)
-            meta_sizes.append(len(r.get("meta", "")) // 2)
+        # API v2 names the binary fields tx_blob / meta_blob; v1 returns them as
+        # tx / meta. Ask for v2 and accept either.
+        r = bl.rpc(
+            args.url,
+            "tx",
+            {"transaction": h, "binary": True, "api_version": 2},
+            retries=3,
+        )
+        if r.get("status") != "success":
+            continue
+        blob = r.get("tx_blob") or r.get("tx")
+        meta = r.get("meta_blob") or r.get("meta")
+        if isinstance(blob, str) and isinstance(meta, str):
+            tx_sizes.append(len(blob) // 2)
+            meta_sizes.append(len(meta) // 2)
 
     acct_sizes = []
     if args.accounts:
@@ -190,14 +215,16 @@ def main() -> int:
         "account_root_bytes_mean": round(mean(acct_sizes), 1) if acct_sizes else None,
         "disk_growth_bytes": growth,
         "nodestore_growth_per_tx": per(nudb),
-        "nodestore_remainder_per_tx": (per(nudb) - tx_b - meta_b) if per(nudb) is not None else None,
+        "nodestore_remainder_per_tx": (
+            (per(nudb) - tx_b - meta_b) if per(nudb) is not None else None
+        ),
         "txdb_growth_per_tx": per(txdb),
         "sqlite": sq,
         "sqlite_tx_table_bytes_per_row": (sq_data / sq_rows) if sq_rows else None,
         "sqlite_account_tx_bytes_per_row": (sq_acct / sq_rows) if sq_rows else None,
-        "sqlite_overhead_per_row": ((sq_file - sq_data - sq_acct) / sq_rows)
-        if (sq_rows and sq_file)
-        else None,
+        "sqlite_overhead_per_row": (
+            ((sq_file - sq_data - sq_acct) / sq_rows) if (sq_rows and sq_file) else None
+        ),
         "notes": "nodestore_remainder = state-tree leaf+inner nodes, ledger headers and "
         "NuDB overhead per tx. SQLite figures cover every row in transaction.db, "
         "including setup transactions; the growth figures cover the drive only.",

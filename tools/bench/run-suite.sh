@@ -10,6 +10,12 @@
 #                            [--ramp S] [--settle S] [--measure S] [--drain S]
 #                            [--max-interval S] [--fee DROPS] [--node-size SIZE]
 #                            [--gen-procs N] [--gen-threads N]
+#                            [--reproduce-phase2]
+#
+# --reproduce-phase2 reruns the Phase 2 report's method exactly as it was run:
+#   the rate-ramp driver, the widened open ledger (TXQ_PROFILE=phase2), node_size
+#   small, a 3000-account pool, 20 s hold / 5 s warmup, rates 500..3750 step 250
+#   (corpus to 3000), fee 50,000 drops. It overrides the corresponding flags.
 #
 # --method steady (default) is the methodology from the RippleX review
 #   (Appendix A): xrpld's default transaction-queue settings, ramp to each load,
@@ -53,6 +59,8 @@ LABEL=""
 POOL=1000
 POOL_SET=0
 METHOD="steady"
+REPRO_P2=0
+TXQ_PROFILE="${TXQ_PROFILE:-default}"
 RATES=""
 RAMP=30
 SETTLE=60
@@ -60,8 +68,13 @@ MEASURE=120
 DRAIN=30
 MAX_INTERVAL=5
 GEN_PROCS=4
-GEN_THREADS=48
-STEADY_FEE=1000000 # high enough that open-ledger fee escalation does not bind; same for every config
+# Submit threads per generator process. This also caps how many submits are in
+# flight (procs x threads = 128): a much higher cap (512) let submits pile up on
+# the stock nodes' RPC job queue until they fell out of sync, while a too-low cap
+# shows up as late submits (GENERATOR-LIMITED). Raise --gen-procs/--gen-threads
+# only if levels whose cadence holds come back generator-limited.
+GEN_THREADS=32
+STEADY_FEE=1000000 # same for every config; escalation still queues past the expected ledger size (xrpld default)
 NODE_SIZE="${NODE_SIZE:-}"
 NODE_HOST="${NODE_HOST:-127.0.0.1}"
 GEN_SSH="${GEN_SSH:-}"
@@ -96,11 +109,19 @@ DRIVER_URLS="http://127.0.0.1:5005,http://127.0.0.1:5006,http://127.0.0.1:5007"
 export XRPLD_BIN="${XRPLD_BIN:-.build/xrpld}"
 
 AVX2_BUILD="${REPO_ROOT}/.build-avx2"
+# The AVX2 ML-DSA backend needs an x86-64 CPU with AVX2; on other hosts (ARM)
+# the AVX2 builds are skipped and the microbench reports C-only timings.
+HAS_AVX2=0
+[[ "$(uname -m)" == "x86_64" ]] && grep -qw avx2 /proc/cpuinfo 2>/dev/null && HAS_AVX2=1
 
 UPSTREAM_BIN_REL=".build-develop/xrpld"
 UPSTREAM_WORKTREE="${UPSTREAM_WORKTREE:-${REPO_ROOT}/.upstream-baseline/develop-probed}"
 UPSTREAM_PATCH="${BENCH_DIR}/patches/develop-probes.patch"
 UPSTREAM_BASE_REF="${UPSTREAM_BASE_REF:-develop}"
+# Extra arguments for the upstream baseline's `conan install`. On a machine with
+# no Conan cache, `conan.lock` can pin recipe revisions no remote still serves;
+# CONAN_EXTRA_ARGS="--lockfile=" builds the same versions without the lockfile.
+CONAN_EXTRA_ARGS="${CONAN_EXTRA_ARGS:-}"
 
 # Fresh detached worktree at the develop base with the probe patch applied: the
 # patch is the two additive, no-op-safe probe commits, so the result is upstream
@@ -117,8 +138,9 @@ build_upstream_binary() {
     git -C "${UPSTREAM_WORKTREE}" apply --3way "${UPSTREAM_PATCH}"
     (
         cd "${UPSTREAM_WORKTREE}"
+        # shellcheck disable=SC2086 # CONAN_EXTRA_ARGS is a word list
         conan install . --output-folder=.build --build=missing -s build_type=Release \
-            -o '&:xrpld=True'
+            -o '&:xrpld=True' ${CONAN_EXTRA_ARGS}
         cmake -S . -B .build \
             -DCMAKE_TOOLCHAIN_FILE=.build/build/generators/conan_toolchain.cmake \
             -DCMAKE_BUILD_TYPE=Release
@@ -147,6 +169,10 @@ while [[ $# -gt 0 ]]; do
         --method)
             METHOD="$2"
             shift 2
+            ;;
+        --reproduce-phase2)
+            REPRO_P2=1
+            shift
             ;;
         --rates)
             RATES="$2"
@@ -247,6 +273,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ ${REPRO_P2} -eq 1 ]]; then
+    # Settings of the Phase 2 sweep (run-sweep.sh at the Phase 2 commit fc52ec2).
+    METHOD="ramp"
+    TXQ_PROFILE="phase2"
+    NODE_SIZE="small"
+    # The multi-sign workloads size their own pools, as they did in Phase 2.
+    if [[ ${MULTISIGN} -eq 0 && ${MS_THROUGHPUT} -eq 0 ]]; then
+        POOL=3000
+        POOL_SET=1
+    fi
+    HOLD=20
+    WARMUP=5
+    RATE_START=500
+    RATE_STEP=250
+    RATE_CAP=3750
+    RATE_EXPECTED=3000
+    CORPUS_FEE=50000
+fi
+
 if [[ ${SMOKE} -eq 1 ]]; then
     HOLD=5
     WARMUP=3
@@ -258,12 +303,15 @@ if [[ ${SMOKE} -eq 1 ]]; then
     else
         POOL=20
         POOL_SET=1
+        # The steady method sizes the pool from the top rate even in smoke mode,
+        # so accounts never submit twice per ledger and the numbers are sane.
+        [[ "${METHOD}" == "steady" ]] && POOL_SET=0
         RAMP=5
         SETTLE=10
         MEASURE=20
         DRAIN=10
         GEN_PROCS=2
-        GEN_THREADS=8
+        GEN_THREADS=32
         # The multi-sign N-curve probe needs >=40 accounts (max N signers +
         # payers); the 20-account throughput pool is too small for it.
         [[ ${MULTISIGN} -eq 1 ]] && POOL=50
@@ -284,6 +332,10 @@ if [[ "${PROFILE}" == "upstream" ]]; then
 fi
 
 # --avx2 has no effect on the upstream profile: upstream develop has no ML-DSA.
+if [[ ${AVX2_NODE} -eq 1 && ${HAS_AVX2} -eq 0 ]]; then
+    echo "--avx2 needs an x86-64 CPU with AVX2; this host ($(uname -m)) has none." >&2
+    exit 1
+fi
 if [[ ${AVX2_NODE} -eq 1 ]]; then
     if [[ "${PROFILE}" == "upstream" ]]; then
         echo "Note: upstream profile uses develop (no ML-DSA); --avx2 has no effect."
@@ -311,7 +363,7 @@ case "${METHOD}" in steady | ramp) ;; *)
     exit 1
     ;;
 esac
-export NODE_SIZE
+export NODE_SIZE TXQ_PROFILE
 
 STEADY_URLS="http://${NODE_HOST}:5005,http://${NODE_HOST}:5006,http://${NODE_HOST}:5007"
 VALIDATOR_URLS="http://${NODE_HOST}:5010,http://${NODE_HOST}:5011,http://${NODE_HOST}:5012,http://${NODE_HOST}:5013,http://${NODE_HOST}:5014"
@@ -360,7 +412,7 @@ fi
 "${REPO_ROOT}/.build/xrpl.bench.pqc" --benchmark_format=json --benchmark_repetitions=10 --benchmark_report_aggregates_only=true >"${OUT}/raw-c.json" 2>/dev/null || true
 # AVX2 backend reuses the main build's Conan toolchain (mldsa_avx2 is a CMake
 # option, not a Conan one). merge_microbench accepts "-" for a missing one.
-if [[ -f "${REPO_ROOT}/.build/CMakeCache.txt" ]] &&
+if [[ ${HAS_AVX2} -eq 1 && -f "${REPO_ROOT}/.build/CMakeCache.txt" ]] &&
     { [[ ${REBUILD_AVX2} -eq 1 ]] || [[ ! -x "${AVX2_BUILD}/xrpl.bench.pqc" ]]; }; then
     echo "building AVX2 microbench (one-time) ..."
     cmake -S "${REPO_ROOT}" -B "${AVX2_BUILD}" \
@@ -435,7 +487,8 @@ fp = json.load(open(p))
 fp.update({
     "method": "${METHOD}",
     "node_size": "${NODE_SIZE}" or "auto (xrpld default)",
-    "transaction_queue": "xrpld defaults",
+    "transaction_queue": "xrpld defaults" if "${TXQ_PROFILE}" == "default" else "phase2 (widened: 10000 target / 20000 max)",
+    "reproduce_phase2": ${REPRO_P2} == 1,
     "rates": "${STEADY_RATES:-}",
     "ramp_s": ${RAMP}, "settle_s": ${SETTLE}, "measure_s": ${MEASURE}, "drain_s": ${DRAIN},
     "max_interval_s": ${MAX_INTERVAL},
@@ -581,7 +634,16 @@ print(math.ceil(need / ${POOL} * 1.1) + 2)")
 
     NLVL=$(python3 -c "print(len([${STEADY_RATES}]))")
     MON_DUR=$(python3 -c "print(int((${RAMP}+${SETTLE}+${MEASURE})*${NLVL}+${DRAIN}+180))")
-    python3 resource_monitor.py --url "${URL}" --duration "${MON_DUR}" --out "${OUT}/monitor.csv" &
+    # Pin the local generator (and the monitor) to the cores no node uses, so
+    # it cannot steal validator CPU. setup.sh records that range in .env; on a
+    # host too small for exclusive pinning there is none and nothing is pinned.
+    PIN=()
+    DRIVER_CPUS=$(grep -m1 '^DEVNET_CPUSET_DRIVER=' "${DEVNET_DIR}/.env" 2>/dev/null | cut -d= -f2 || true)
+    if [[ -n "${DRIVER_CPUS}" ]] && command -v taskset >/dev/null; then
+        PIN=(taskset -c "${DRIVER_CPUS}")
+    fi
+    "${PIN[@]}" python3 resource_monitor.py --url "${URL}" --interval 1.0 \
+        --duration "${MON_DUR}" --out "${OUT}/monitor.csv" &
     MON_PID=$!
 
     DRIVER_ARGS=(--urls "${STEADY_URLS}" --validator-urls "${VALIDATOR_URLS}"
@@ -600,8 +662,9 @@ print(math.ceil(need / ${POOL} * 1.1) + 2)")
             --out out/steady $(printf '%q ' "${DRIVER_ARGS[@]}")"
         rsync -az "${GEN_SSH}:${GEN_DIR}/out/" "${OUT}/"
     else
-        echo "local generator (same host as the nodes)" >"${OUT}/generator_host.txt"
-        python3 steady_state_driver.py --corpus "${OUT}/corpus.jsonl" --out "${OUT}/steady" \
+        echo "local generator (same host as the nodes), pinned to CPUs ${DRIVER_CPUS:-none (unpinned)}" \
+            >"${OUT}/generator_host.txt"
+        "${PIN[@]}" python3 steady_state_driver.py --corpus "${OUT}/corpus.jsonl" --out "${OUT}/steady" \
             "${DRIVER_ARGS[@]}"
     fi
 
