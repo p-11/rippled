@@ -418,6 +418,11 @@ def main() -> int:
     if not rates:
         print("no rate levels", file=sys.stderr)
         return 1
+    if min(rates) <= 0:
+        # A level with a target of 0 can never count as delivered, so it would
+        # stop the run as generator-limited before any real level is scored.
+        print(f"every rate must be > 0 tx/s, got {rates}", file=sys.stderr)
+        return 1
 
     names = (
         {f"validator-{i + 1}": u for i, u in enumerate(validator_urls)}
