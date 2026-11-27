@@ -18,6 +18,10 @@
 # XRPLD_BIN selects the binary baked into the image (default the hybrid build at
 # .build/xrpld); the stock ECC baseline profile overrides it.
 #
+# Validators publish their admin RPC on host ports 5010-5014 so the bench
+# harness can sample job queue depth, dropped transactions and consensus round
+# time on the nodes that actually build ledgers.
+#
 # Each node bind-mounts a host perf directory so the aggregator can read the
 # PerfLog files (JobQueue events + verification probes) after a run.
 
@@ -31,6 +35,8 @@ services:
     image: rippled-pq:dev
     container_name: rippled-validator-1
     cpuset: "${DEVNET_CPUSET_VALIDATOR_1:-0,1}"
+    ports:
+      - "5010:5005" # admin RPC, sampled by the bench pollers
     volumes:
       - ./configs/validator-1:/etc/rippled:ro
       - ./perf/validator-1:/var/lib/rippled/perf
@@ -41,6 +47,8 @@ services:
     image: rippled-pq:dev
     container_name: rippled-validator-2
     cpuset: "${DEVNET_CPUSET_VALIDATOR_2:-2,3}"
+    ports:
+      - "5011:5005" # admin RPC, sampled by the bench pollers
     volumes:
       - ./configs/validator-2:/etc/rippled:ro
       - ./perf/validator-2:/var/lib/rippled/perf
@@ -52,6 +60,8 @@ services:
     image: rippled-pq:dev
     container_name: rippled-validator-3
     cpuset: "${DEVNET_CPUSET_VALIDATOR_3:-4,5}"
+    ports:
+      - "5012:5005" # admin RPC, sampled by the bench pollers
     volumes:
       - ./configs/validator-3:/etc/rippled:ro
       - ./perf/validator-3:/var/lib/rippled/perf
@@ -63,6 +73,8 @@ services:
     image: rippled-pq:dev
     container_name: rippled-validator-4
     cpuset: "${DEVNET_CPUSET_VALIDATOR_4:-6,7}"
+    ports:
+      - "5013:5005" # admin RPC, sampled by the bench pollers
     volumes:
       - ./configs/validator-4:/etc/rippled:ro
       - ./perf/validator-4:/var/lib/rippled/perf
@@ -74,6 +86,8 @@ services:
     image: rippled-pq:dev
     container_name: rippled-validator-5
     cpuset: "${DEVNET_CPUSET_VALIDATOR_5:-8,9}"
+    ports:
+      - "5014:5005" # admin RPC, sampled by the bench pollers
     volumes:
       - ./configs/validator-5:/etc/rippled:ro
       - ./perf/validator-5:/var/lib/rippled/perf

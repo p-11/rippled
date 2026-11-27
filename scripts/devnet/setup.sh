@@ -20,6 +20,28 @@ XRPLD="${XRPLD:-${REPO_ROOT}/.build/xrpld}"
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 PERF_DIR="${SCRIPT_DIR}/perf"
 PROFILE="${PROFILE:-hybrid}"
+# NODE_SIZE: empty (default) omits [node_size] so xrpld picks its own size from
+# RAM and cores, which is the mainnet recommended starting point (see
+# cfg/xrpld-example.cfg). Set tiny|small|medium|large|huge to pin it. The
+# transaction queue / open ledger settings are deliberately left at xrpld
+# defaults so they are not a variable in the measurement.
+NODE_SIZE="${NODE_SIZE:-}"
+NODE_SIZE_SECTION=""
+[[ -n "${NODE_SIZE}" ]] && NODE_SIZE_SECTION=$'[node_size]\n'"${NODE_SIZE}"
+# TXQ_PROFILE: "default" (xrpld's own transaction-queue settings, the mainnet
+# recommended configuration) or "phase2", which restores the widened open ledger
+# the Phase 2 report ran with (10,000 target / 20,000 max) to reproduce it.
+TXQ_PROFILE="${TXQ_PROFILE:-default}"
+case "${TXQ_PROFILE}" in
+    default) TXQ_SECTION="" ;;
+    phase2)
+        TXQ_SECTION=$'[transaction_queue]\nminimum_txn_in_ledger = 10000\nminimum_txn_in_ledger_standalone = 10000\ntarget_txn_in_ledger = 10000\nmaximum_txn_in_ledger = 20000'
+        ;;
+    *)
+        echo "Unknown TXQ_PROFILE '${TXQ_PROFILE}' (expected default|phase2)" >&2
+        exit 1
+        ;;
+esac
 
 QUANTUM_HASH="8BDE7A46A94C208C968B694659D99F89D5552A1F89F1879B7315AF2ADB3F390B"
 
@@ -92,6 +114,8 @@ IPS_FIXED="${IPS_FIXED%$'\n'}"
 # Render a template, substituting the shared placeholders. $1=template $2=output.
 render() {
     sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+        -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
+        -e "s|__TXQ_SECTION__|${TXQ_SECTION//$'\n'/\\n}|" \
         -e "s|__AMENDMENTS_SECTION__|${AMENDMENTS_SECTION//$'\n'/\\n}|" \
         -e "s|__PQ_VALIDATIONS_SECTION__|${PQ_VALIDATIONS_SECTION//$'\n'/\\n}|" \
         "$1" >"$2"
@@ -110,6 +134,8 @@ for i in 1 2 3 4 5; do
         # so this path makes no calls to xrpld and runs on the develop binary.
         VALIDATORS_TXT_BODY+="    ${UPSTREAM_VAL_PUBKEYS[$((i - 1))]}"$'\n'
         sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+            -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
+            -e "s|__TXQ_SECTION__|${TXQ_SECTION//$'\n'/\\n}|" \
             -e "s|__VALIDATION_SEED__|${UPSTREAM_VAL_SEEDS[$((i - 1))]}|" \
             "${SCRIPT_DIR}/templates/validator-upstream.cfg.tmpl" \
             >"${NODE_DIR}/xrpld.cfg"
@@ -134,6 +160,8 @@ for i in 1 2 3 4 5; do
     VALIDATORS_TXT_BODY+="    ${MASTER_ECC_PK}"$'\n'
 
     sed -e "s|__IPS_FIXED__|${IPS_FIXED//$'\n'/\\n}|" \
+        -e "s|__NODE_SIZE_SECTION__|${NODE_SIZE_SECTION//$'\n'/\\n}|" \
+        -e "s|__TXQ_SECTION__|${TXQ_SECTION//$'\n'/\\n}|" \
         -e "s|__AMENDMENTS_SECTION__|${AMENDMENTS_SECTION//$'\n'/\\n}|" \
         -e "s|__PQ_VALIDATIONS_SECTION__|${PQ_VALIDATIONS_SECTION//$'\n'/\\n}|" \
         -e "s|__VALIDATOR_TOKEN__|${TOKEN_WRAPPED//$'\n'/\\n}|" \
@@ -174,7 +202,10 @@ if [[ ${NCPU} -lt 16 ]]; then
         echo "DEVNET_PINNING_NOTE=\"unpinned: host has ${NCPU} logical CPUs, all nodes share ${ALL}\""
     } >"${ENV_FILE}"
 elif [[ ${NCPU} -eq 16 ]]; then
-    echo 'DEVNET_PINNING_NOTE="validators 0-9 (2 each), stock 10-12, host/driver 13-15"' >"${ENV_FILE}"
+    {
+        echo 'DEVNET_PINNING_NOTE="validators 0-9 (2 each), stock 10-12, host/driver 13-15"'
+        echo 'DEVNET_CPUSET_DRIVER=13-15'
+    } >"${ENV_FILE}"
 else
     # On a bigger host (e.g. a bare-metal benchmark instance) scale the disjoint
     # cpuset map up: give each validator and stock node a larger contiguous core
@@ -200,6 +231,8 @@ else
         done
         echo "DEVNET_PINNING_NOTE=\"validators ${vc} cores each, stock ${sc} each," \
             "host/driver $(rng ${cur} $((NCPU - 1))) (${NCPU} CPUs)\""
+        # Cores no node is pinned to; run-suite.sh pins the load generator here.
+        echo "DEVNET_CPUSET_DRIVER=$(rng ${cur} $((NCPU - 1)))"
     } >"${ENV_FILE}"
     echo "Scaled core pinning for ${NCPU} CPUs: validators ${vc} cores each, stock ${sc} each."
 fi

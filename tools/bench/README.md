@@ -18,6 +18,58 @@ Absolute values (tps, CPU%) are workstation-specific and only **directional**;
 read the ECC-vs-hybrid ratio, not the raw figure. Sizes and microbench timings
 are exact; the verify probes are the cleanest in-node signal.
 
+## Steady-state method (default since the RippleX review)
+
+The Phase 2 throughput figures came from `rate_ramp_driver.py`. The review of that
+report (Appendix A) asked for a rerun that changes the methodology. `run-suite.sh
+--method steady`, now the default, does that. (`--method ramp` still runs the Phase 2
+driver, but on the new default-queue configs; to reproduce Phase 2 exactly, check out
+the commit recorded in its `fingerprint.json`.)
+
+| Review point                                               | What the harness now does                                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Widened open ledger / queue settings were the measured cap | Templates keep xrpld's default `[transaction_queue]` settings; `[node_size]` is left to xrpld unless `NODE_SIZE` is set                                                                                                                                                        |
+| Limit read from a client confirmation ratio                | A level passes while every validated-ledger interval stays <= 5 s (`--max-interval`) for the whole window                                                                                                                                                                      |
+| Scored during a 12 s ramp step                             | Each level ramps (`--ramp`), settles without scoring (`--settle`), then only the `--measure` window is scored                                                                                                                                                                  |
+| 12 s grace counted, divided by the window                  | Throughput = transactions in ledgers validated inside the window / window length; client inclusion is reported both within the window and with `--drain`                                                                                                                       |
+| `terQUEUED` counted as accepted                            | Every engine result is counted separately                                                                                                                                                                                                                                      |
+| Throughput from the client script                          | Read from the ledgers (`steady.ledgers.jsonl`: every validated ledger, its tx count and first-seen time)                                                                                                                                                                       |
+| Account pool too small; sequence races                     | `--pool auto` = top rate x 5 s x 1.25; accounts are used strictly round-robin, so no account submits twice within one ledger                                                                                                                                                   |
+| Generator might be the bottleneck                          | Sharded over `--gen-procs` processes on persistent connections; logs every submit's scheduled time, send time, RPC latency and result, plus its CPU. A level where it fell behind is `GENERATOR-LIMITED`, not a network result. `GEN_SSH=user@host` runs it on another machine |
+| Job queue sampled on one stock node                        | `server_info` sampled every second on all five validators (ports 5010-5014) and stock nodes: round time, job backlog, `jq_trans_overflow`, load factor                                                                                                                         |
+| No queue-state data                                        | `fee` sampled every second on each stock node: expected / current ledger size, queue size, open-ledger fee                                                                                                                                                                     |
+| Storage growth without breakdown                           | `storage_breakdown.py`: tx, metadata, AccountRoot, NuDB growth and remainder, SQLite data vs. overhead                                                                                                                                                                         |
+| Raw data unpublished                                       | `results/<label>/raw/` (perf logs, node debug logs, configs, final server_info) is collected before teardown; `package-results.sh` builds a tarball + SHA256SUMS + manifest for a release                                                                                      |
+
+The fee is fixed (`--fee`, default 1,000,000 drops) and identical across
+configurations. A single-signed hybrid Payment has the same base fee as an ECC
+one, so both run at the same fee level. No fixed fee avoids open-ledger fee
+escalation: xrpld scales the escalated fee from the median fee of the previous
+ledger, so once every transaction pays the same fee, transactions beyond the
+expected ledger size are queued. That is xrpld's default (mainnet) behaviour and
+part of what is measured; `steady.fee.jsonl` records the expected ledger size,
+queue size and open-ledger fee over time, and a level only passes if the ledgers
+carried the offered load.
+
+Corpus size grows with hold time: about sum(rate) x (settle + measure) blobs.
+`--rate-expected` bounds it (levels up to it plus two steps are pre-signed). A run
+that passes beyond that stops as generator-limited and needs a bigger corpus. Prefer an
+explicit `--rates` list bracketing the limit: the generator holds its corpus in RAM.
+
+When the generator runs on the same host as the nodes (the default), it is pinned with
+`taskset` to the cores `setup.sh` leaves free of nodes (`DEVNET_CPUSET_DRIVER` in
+`scripts/devnet/.env`), so it does not compete with the validators for CPU.
+
+`--gen-procs` x `--gen-threads` (default 4 x 32) caps how many submits are in
+flight. Too high a cap is harmful: with 512 in flight, submits piled up on the
+stock nodes' RPC job queue (jobs waited 45 s) until the nodes fell out of sync
+and the network stalled at a load it otherwise held. Too low a cap shows up as
+late submits and a `GENERATOR-LIMITED` level; raise it only then.
+
+`analyze_steady_state.py PREFIX` re-scores a run from its raw files at any time.
+`summarize_repeats.py` compares repeats and configurations: a configuration's
+capacity counts as established when its repeats agree within one load step.
+
 ## Architecture
 
 `run-suite.sh` is the orchestrator for one configuration. It chains the Python
@@ -228,22 +280,27 @@ scripts/devnet/docker-compose.yml up -d --build`.
 
 ## The scripts
 
-| Script                 | Role                                                                       |
-| ---------------------- | -------------------------------------------------------------------------- |
-| `bench_lib.py`         | Shared RPC helpers + `LedgerPoller` (times when each tx hash validates)    |
-| `prepare_accounts.py`  | Mints/funds the source-account pool; hybrid adds PQ keys + opt-in          |
-| `presign_corpus.py`    | Pre-signs single-sign Payments so the timed run pays only submit->validate |
-| `presign_multisign.py` | Sets SignerLists and pre-signs N-of-N multi-signed Payments                |
-| `rate_ramp_driver.py`  | The throughput engine (open-loop rate-ramp; see below)                     |
-| `run-sweep.sh`         | Runs the full configuration sweep and packs the results                    |
-| `multisign_probe.py`   | Drives multi-signed txs and reads the per-signer verify probe              |
-| `measure_disk.py`      | `du` of each node's database dir via `docker exec`; called per ramp level  |
-| `resource_monitor.py`  | Samples `/proc` CPU/RSS + JobQueue backlog every 100 ms                    |
-| `merge_microbench.py`  | Merges the C and AVX2 microbench JSON, taking the median aggregate         |
-| `aggregate.py`         | Turns every artifact into `report.md`                                      |
-| `run-suite.sh`         | Orchestrates all of the above end to end                                   |
+| Script                    | Role                                                                       |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `bench_lib.py`            | Shared RPC helpers + `LedgerPoller` (times when each tx hash validates)    |
+| `prepare_accounts.py`     | Mints/funds the source-account pool; hybrid adds PQ keys + opt-in          |
+| `presign_corpus.py`       | Pre-signs single-sign Payments so the timed run pays only submit->validate |
+| `presign_multisign.py`    | Sets SignerLists and pre-signs N-of-N multi-signed Payments                |
+| `rate_ramp_driver.py`     | Phase 2 throughput engine (open-loop rate-ramp; `--method ramp`)           |
+| `steady_state_driver.py`  | Steady-state engine (`--method steady`, default; see above)                |
+| `analyze_steady_state.py` | Scores a steady-state run from its raw files                               |
+| `storage_breakdown.py`    | Splits per-transaction disk growth into its components                     |
+| `summarize_repeats.py`    | Capacity across repeats/configs; checks agreement within one step          |
+| `package-results.sh`      | Tarball + SHA256SUMS + manifest of a results dir, secrets/corpora excluded |
+| `run-sweep.sh`            | Runs the full configuration sweep and packs the results                    |
+| `multisign_probe.py`      | Drives multi-signed txs and reads the per-signer verify probe              |
+| `measure_disk.py`         | `du` of each node's database dir via `docker exec`; called per ramp level  |
+| `resource_monitor.py`     | Samples `/proc` CPU/RSS + JobQueue backlog every 100 ms                    |
+| `merge_microbench.py`     | Merges the C and AVX2 microbench JSON, taking the median aggregate         |
+| `aggregate.py`            | Turns every artifact into `report.md`                                      |
+| `run-suite.sh`            | Orchestrates all of the above end to end                                   |
 
-**Throughput method.** The open-loop rate-ramp (`rate_ramp_driver.py`) submits at a
+**Phase 2 throughput method (`--method ramp`).** The open-loop rate-ramp (`rate_ramp_driver.py`) submits at a
 fixed target rate from a random sender out of a large account pool, ramping the rate
 level by level, and stops at the knee where achieved throughput stops tracking the
 offered rate. Spreading each submission across the pool keeps every account far below
@@ -256,17 +313,24 @@ use the same rate-ramp, with a per-signer-count rate band.
 
 ## Outputs (`results/<label>/`)
 
-| File                                        | Contents                                                   |
-| ------------------------------------------- | ---------------------------------------------------------- |
-| `report.md`                                 | The aggregated, human-readable report                      |
-| `microbench.json` / `sizes.json`            | Crypto timings (both backends) + signature/payload sizes   |
-| `fingerprint.json`                          | Machine/build provenance                                   |
-| `run.cl_summary.json` / `run.cl_levels.csv` | Throughput/latency per rate level + saturation knee        |
-| `monitor.csv`                               | Per-node CPU/RSS/backlog time series                       |
-| `disk_before.json` / `run.cl_disk.json`     | Per-node DB size: pre-drive baseline, then each ramp level |
-| `multisign.json`                            | Per-signer verify N-curve (`--multisign`)                  |
-| `run_ms<N>.cl_summary.json`                 | Throughput per signer count (`--ms-throughput`)            |
-| `corpus*.jsonl`                             | Pre-signed blobs (large; gitignored)                       |
+| File                                            | Contents                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------- |
+| `report.md`                                     | The aggregated, human-readable report                           |
+| `microbench.json` / `sizes.json`                | Crypto timings (both backends) + signature/payload sizes        |
+| `fingerprint.json`                              | Machine/build provenance                                        |
+| `run.cl_summary.json` / `run.cl_levels.csv`     | Throughput/latency per rate level + saturation knee             |
+| `monitor.csv`                                   | Per-node CPU/RSS/backlog time series                            |
+| `disk_before.json` / `run.cl_disk.json`         | Per-node DB size: pre-drive baseline, then each ramp level      |
+| `multisign.json`                                | Per-signer verify N-curve (`--multisign`)                       |
+| `run_ms<N>.cl_summary.json`                     | Throughput per signer count (`--ms-throughput`)                 |
+| `steady.summary.json` / `steady.levels.csv`     | Steady-state verdict and metrics per level + capacity           |
+| `steady.submits.p<K>.csv.gz`                    | Every submit: scheduled/sent/done time, result, hash            |
+| `steady.ledgers.jsonl` / `.ledger_txs.csv.gz`   | Every validated ledger (first seen, tx count) and its txs       |
+| `steady.server_info.jsonl` / `steady.fee.jsonl` | Validator/stock samples; open-ledger and queue state            |
+| `steady.gen_cpu.csv` / `generator_host.txt`     | Generator CPU per process; where the generator ran              |
+| `storage.json` / `storage.md`                   | Storage breakdown per transaction                               |
+| `raw/`                                          | perf logs, node debug logs, redacted configs, final server_info |
+| `corpus*.jsonl`                                 | Pre-signed blobs (large; gitignored)                            |
 
 The PerfLog probe events themselves are at `scripts/devnet/perf/<node>/perf.log`
 (JSON lines of `event` / `duration_us`), pooled across nodes by the aggregator.
@@ -276,7 +340,12 @@ The PerfLog probe events themselves are at `scripts/devnet/perf/<node>/perf.log`
 - **Microbench** -- isolated crypto cost per op (ECC vs ML-DSA C vs AVX2).
 - **In-process verify overhead** -- median + bootstrap 95% CI + p95/p99 per probe
   in a live node. The strongest, best-isolated metric.
-- **Throughput** -- the rate-ramp knee: the highest rate the network keeps up with
+- **Capacity (steady state)** -- the highest load at which every validated-ledger
+  interval stayed within 5 s across the measurement window, with throughput read
+  from the ledgers. The table shows next to it whether the generator delivered,
+  how results split (`tesSUCCESS` / `terQUEUED` / other), and validator round
+  time and job backlog, so a failing level shows where the time went.
+- **Throughput (Phase 2, `--method ramp`)** -- the rate-ramp knee: the highest rate the network keeps up with
   before achieved throughput stops tracking the offered rate. AVX2 leaves it
   unchanged and `job_backlog` stays at **zero** up to the knee, so throughput is
   bound by transaction and ledger **size**, not verify
@@ -360,7 +429,7 @@ The harness expects the build under `.build/` (`.build/xrpld`, `.build/xrpl.benc
 # One-time Conan setup: import the project profile and put the XRPLF remote above
 # Conan Center so the patched recipes win.
 conan config install conan/profiles/ -tf "$(conan config home)/profiles/"
-conan remote add --index 0 --force xrplf https://conan.ripplex.io
+conan remote add --index 0 --force xrplf https://conan.xrplf.org/repository/conan/
 
 conan install . --output-folder .build --build missing \
     --settings build_type=Release -o '&:xrpld=True' -o '&:bench=True'
@@ -419,7 +488,12 @@ bash scripts/devnet/clean.sh                                # same, plus clears 
 
 - **`conan install` cannot resolve a dependency (for example `ed25519`)**: the XRPLF
   remote is missing or below Conan Center. Re-run
-  `conan remote add --index 0 --force xrplf https://conan.ripplex.io`.
+  `conan remote add --index 0 --force xrplf https://conan.xrplf.org/repository/conan/`.
+  (The old XRPLF Conan address used in earlier docs no longer resolves.)
+- **`Unable to find 'openssl/...#<revision>' in remotes`**: `conan.lock` pins a recipe
+  revision only the retired remote had. A machine with a warm Conan cache is
+  unaffected; on a fresh one add `--lockfile=''` to `conan install` (same versions,
+  current recipe revisions) and note it with the results.
 - **CMake cannot find `benchmark`**: configured without the bench option. Re-run
   `conan install` with `-o '&:bench=True'` and `cmake` with `-Dbench=ON`.
 - **`xrpld binary not found at .build/xrpld`** from `setup.sh`: the build did not

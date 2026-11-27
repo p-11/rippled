@@ -7,6 +7,7 @@ import argparse
 import csv
 import os
 import subprocess
+import signal
 import sys
 import time
 
@@ -81,7 +82,11 @@ def main() -> int:
     last_t = time.monotonic()
     rows: list[dict] = []
     end = time.monotonic() + args.duration
-    while time.monotonic() < end:
+    # SIGTERM ends sampling early but still writes the CSV, so the caller can
+    # stop the monitor when the drive finishes instead of idling out --duration.
+    stop = {"flag": False}
+    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("flag", True))
+    while time.monotonic() < end and not stop["flag"]:
         t = time.monotonic()
         dt = t - last_t
         backlog = bl.job_backlog(args.url)
